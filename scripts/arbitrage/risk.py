@@ -20,16 +20,21 @@ def snapshot(store: PairStore, cfg: ArbConfig) -> RiskSnapshot:
     opens = store.open_pairs()
     unpaired = 0.0
     locked = 0.0
+    unpaired_count = 0
     for pair in opens:
         locked += pair.first.notional + pair.second.notional
         if pair.status in ("awaiting_hedge", "escalating", "pending_first"):
+            unpaired_count += 1
             unpaired += pair.first.notional + max(0.0, pair.first.shares - pair.second.shares) * (
                 pair.max_second_price or 0.0
             )
     reason = None
     allowed = True
+    max_unpaired = int(getattr(cfg, "max_concurrent_unpaired", 2) or 2)
     if len(opens) >= cfg.max_open_pairs:
         allowed, reason = False, "max_open_pairs"
+    elif unpaired_count >= max_unpaired:
+        allowed, reason = False, "max_concurrent_unpaired"
     elif unpaired >= cfg.max_unpaired_notional:
         allowed, reason = False, "max_unpaired_notional"
     elif locked >= cfg.max_capital_locked:

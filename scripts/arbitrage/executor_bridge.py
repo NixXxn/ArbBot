@@ -101,7 +101,24 @@ class IntentExecutor:
                 self.engine.store.log_event(pair, "first_miss", reason=pair.escalation_reason)
                 return {"ok": False, "kind": intent.kind, "reason": fill.reason}
             self.engine.on_first_fill(pair, fill.shares, fill.avg_price, fill.fee, fill.order_id)
-            return {"ok": True, "kind": intent.kind, "fill": fill.__dict__, "pair_id": pair.pair_id}
+            result = {"ok": True, "kind": intent.kind, "fill": fill.__dict__, "pair_id": pair.pair_id}
+            # Same-cycle hedge: shrink unpaired window when immediate_hedge is on.
+            if getattr(self.engine.cfg, "immediate_hedge", True) and pair.status == "awaiting_hedge":
+                need = pair.unpaired_shares()
+                max_px = pair.max_second_price
+                if need > 0 and max_px is not None and max_px > 0:
+                    hedge = self.client.buy(pair.second.token, need, max_px)
+                    result["immediate_hedge"] = hedge.__dict__
+                    if hedge.ok and hedge.shares > 0:
+                        self.engine.on_second_fill(
+                            pair, hedge.shares, hedge.avg_price, hedge.fee, hedge.order_id
+                        )
+                        result["hedged"] = True
+                    else:
+                        self.engine.store.log_event(
+                            pair, "immediate_hedge_miss", reason=hedge.reason
+                        )
+            return result
 
         if intent.kind == "hedge_second" and pair is not None:
             if pair.hedge_order_id and pair.status == "awaiting_hedge":

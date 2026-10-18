@@ -35,7 +35,10 @@ portfolio controls, logging, paper persistence, dashboard supervisor.
 | `position_usd` | 45 |
 | `max_position_usd` | 110 |
 | `max_open_pairs` | 8 |
-| `hedge_timeout_seconds` | 120 |
+| `hedge_timeout_seconds` | 60 |
+| `max_concurrent_unpaired` | 2 |
+| `immediate_hedge` | true |
+| `hedge_depth_multiple` | 1.25 |
 | `max_unpaired_notional` | 45 |
 | `min_pair_profit_pct` | 0.005 |
 | mode | **paper** |

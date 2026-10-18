@@ -13,13 +13,11 @@ if os.environ.get("BOT_MODE", "dashboard") == "dashboard":
         raise SystemExit(1)
 
 directory = Path(os.environ.get("BOT_DATA_DIR", "/data"))
-candidates = [directory / "replica-live-state.json",
-              directory / "replica-monitor-signals.jsonl",
-              directory / "replica-paper-btc.jsonl",
-              directory / "replica-paper-eth.jsonl",
-              directory / "replica-paper-btc-15m.jsonl",
-              directory / "replica-paper-eth-15m.jsonl",
-              directory / "replica-paper-btc-5m.jsonl",
-              directory / "replica-paper-eth-5m.jsonl"]
+candidates = [
+    directory / "replica-paper-arbitrage.jsonl",
+    directory / "replica-paper-portfolio.json",
+    directory / "arb-pairs.json",
+    directory / "replica-paper-console.log",
+]
 fresh = [path for path in candidates if path.exists() and time.time() - path.stat().st_mtime <= 180]
 raise SystemExit(0 if fresh else 1)

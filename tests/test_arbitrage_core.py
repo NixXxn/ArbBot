@@ -44,7 +44,9 @@ def test_load_config_defaults():
     assert loaded.max_pair_cost == 0.94
     assert loaded.min_edge == 0.025
     assert loaded.safety_margin == 0.005
-    assert loaded.hedge_timeout_seconds == 120
+    assert loaded.hedge_timeout_seconds == 60
+    assert loaded.immediate_hedge is True
+    assert loaded.max_concurrent_unpaired == 2
 
 
 def test_pair_net_fee_aware(cfg):
@@ -80,9 +82,9 @@ def _market() -> ArbMarket:
     )
 
 
-def test_leg_order_prefers_urgent_rising_leg():
+def test_leg_order_buys_rising_leg_first():
     m = _market()
-    # Yes: tight spread, thin ask (urgent). No: deep book.
+    # Yes: thin ask + bid support + cheaper → more likely to rise. No: deep ask.
     quote = PairQuote(
         market=m,
         book_a=LegBook(bid=0.39, ask=0.40, bid_size=50, ask_size=3, spread=0.01, mid=0.395, fetched_ms=int(time.time()*1000)),
@@ -96,6 +98,7 @@ def test_leg_order_prefers_urgent_rising_leg():
     assert choice is not None
     assert choice.first_outcome == "Yes"
     assert choice.second_outcome == "No"
+    assert choice.reason.startswith("rise_")
 
 
 def test_refuse_when_counterleg_too_thin():
@@ -127,6 +130,7 @@ class ScriptedClient:
 
 
 def test_partial_first_sizes_second(tmp_path, cfg):
+    cfg.immediate_hedge = False
     store = PairStore(tmp_path / "pairs.json")
     engine = ArbEngine(cfg, store, discover_fn=lambda c: [])
     pair = store.new_pair(
@@ -153,6 +157,31 @@ def test_partial_first_sizes_second(tmp_path, cfg):
     assert pair.status == "paired"
     assert pair.second.shares == 7.5
     assert pair.locked_profit is not None
+
+
+def test_immediate_hedge_after_first_fill(tmp_path, cfg):
+    cfg.immediate_hedge = True
+    store = PairStore(tmp_path / "pairs.json")
+    engine = ArbEngine(cfg, store, discover_fn=lambda c: [])
+    from arbitrage.pair_state import LegFill
+
+    pair = store.new_pair(
+        condition_id="c", slug="s",
+        first=LegFill(outcome="Yes", token="tokA"),
+        second=LegFill(outcome="No", token="tokB"),
+        target_shares=10, expected_net=0.2,
+    )
+    client = ScriptedClient([
+        FillResult(True, shares=10.0, avg_price=0.40, fee=0.04, notional=4.0, order_id="o1"),
+        FillResult(True, shares=10.0, avg_price=0.48, fee=0.05, notional=4.8, order_id="o2"),
+    ])
+    ex = IntentExecutor(engine, client)
+    result = ex.execute(Intent(kind="enter_first", pair=pair, shares=10, limit_price=0.42, token="tokA", outcome="Yes"))
+    assert result["ok"]
+    assert result.get("hedged") is True
+    assert pair.status == "paired"
+    assert pair.second.shares == 10.0
+    assert len(client.calls) == 2
 
 
 def test_hedge_rejects_above_cap_then_timeout_close(tmp_path, cfg):

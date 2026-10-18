@@ -51,21 +51,24 @@ class ArbConfig:
     min_ask: float = 0.02
     max_ask: float = 0.95
     min_ask_size: float = 3.0
+    hedge_depth_multiple: float = 1.25
     position_usd: float = 45.0
     max_position_usd: float = 110.0
     max_open_pairs: int = 8
     max_unpaired_notional: float = 45.0
+    max_concurrent_unpaired: int = 2
     max_unpaired_loss: float = 0.02
     max_capital_locked: float = 500.0
-    hedge_timeout_seconds: float = 120.0
-    max_quote_age_ms: int = 2000
+    hedge_timeout_seconds: float = 60.0
+    max_quote_age_ms: int = 2500
     min_pair_profit_pct: float = 0.005
     pair_bid_sum_exit: float = 0.99
     scan_limit: int = 250
     prefer_crypto_weather: bool = True
     maker_tick: float = 0.01
+    immediate_hedge: bool = True
     min_position_usd: float = 2.0
-    poll_interval_seconds: float = 5.0
+    poll_interval_seconds: float = 2.0
     starting_balance: float = 1000.0
 
     def to_dict(self) -> dict[str, Any]:

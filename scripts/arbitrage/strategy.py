@@ -109,6 +109,10 @@ class ArbEngine:
                 choice.first_size,
                 choice.second_size,
             )
+            depth_mult = float(getattr(self.cfg, "hedge_depth_multiple", 1.25) or 1.25)
+            if choice.second_size + 1e-9 < shares * depth_mult:
+                rejects["hedge_depth_thin"] = rejects.get("hedge_depth_thin", 0) + 1
+                continue
             if shares * choice.first_ask < self.cfg.min_position_usd:
                 rejects["size_too_small"] = rejects.get("size_too_small", 0) + 1
                 continue

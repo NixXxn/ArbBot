@@ -1,6 +1,6 @@
 # Arbot fee-aware YES/NO (Up/Down) arbitrage defaults — paper mode.
 mode: paper
-poll_interval_seconds: 5
+poll_interval_seconds: 2
 starting_balance: 1000
 min_position_usd: 2
 
@@ -17,16 +17,23 @@ arbitrage:
   min_ask: 0.02
   max_ask: 0.95
   min_ask_size: 3.0
+  # Soft depth multiple: counterleg ask size should cover this × target shares.
+  hedge_depth_multiple: 1.25
   position_usd: 45.0
   max_position_usd: 110.0
   max_open_pairs: 8
+  # Cap stacked unpaired risk without killing throughput.
   max_unpaired_notional: 45.0
+  max_concurrent_unpaired: 2
   max_unpaired_loss: 0.02
   max_capital_locked: 500.0
-  hedge_timeout_seconds: 120
-  max_quote_age_ms: 2000
+  # Moderate: close unpaired sooner without being hair-trigger.
+  hedge_timeout_seconds: 60
+  max_quote_age_ms: 2500
   min_pair_profit_pct: 0.005
   pair_bid_sum_exit: 0.99
   scan_limit: 250
   prefer_crypto_weather: true
   maker_tick: 0.01
+  # After first fill, attempt hedge in the same cycle (no artificial delay).
+  immediate_hedge: true
