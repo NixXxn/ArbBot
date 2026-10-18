@@ -1,0 +1,39 @@
+{
+  "version": 2,
+  "asset": "eth",
+  "strategy": "kraken_eth_replica",
+  "interval_seconds": 300,
+  "remaining_seconds": 60,
+  "min_z": 0.0,
+  "min_move_bp": 5.0,
+  "volatility_minutes": 60,
+  "volatility_floor": 0.0001,
+  "min_probability": 0.8,
+  "min_edge": 0.02,
+  "min_ask": 0.68,
+  "max_ask": 0.77,
+  "fee_rate_ceiling": 0.1,
+  "probability_haircut": 0.03,
+  "probability_buckets": [],
+  "move_probability_buckets": [
+    {
+      "min_move_bp": 5.0,
+      "max_move_bp": 7.5,
+      "samples": 2540,
+      "wins": 2352,
+      "probability_lower": 0.9151470245531039
+    },
+    {
+      "min_move_bp": 7.5,
+      "max_move_bp": null,
+      "samples": 7247,
+      "wins": 7085,
+      "probability_lower": 0.9739807037833408
+    }
+  ],
+  "order_notional": 4.0,
+  "entry_budget": 5.0,
+  "target_entries": 6,
+  "proxy_validation_passed": true,
+  "live_profitability_established": false
+}

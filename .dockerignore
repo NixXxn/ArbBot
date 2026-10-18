@@ -1,0 +1,15 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+.venv
+target
+logs
+research/data
+__pycache__
+*.pyc
+*.jsonl
+market_log*.txt
+src/market_log*.txt
+polymarket-sniperbot-source.tar.gz

@@ -1,0 +1,38 @@
+{
+  "data": {
+    "proxy_wallet": "0x92de2fe0ac784567d1f0fde7f33eea6a9fec199e",
+    "trades": 514,
+    "biggest_win": 535.515369,
+    "views": 0,
+    "join_date": null,
+    "all_time_pnl": {
+      "timestamp": 1791614739,
+      "source_block": 95272993,
+      "realized_market_pnl": 865.012031,
+      "realized_lp_pnl": 0.0,
+      "realized_combo_pnl": 0.0,
+      "unrealized_pnl": -2.5225,
+      "fees_refunded": 0.0,
+      "maker_rebate": 0.0,
+      "taker_rebate": 0.0,
+      "reward_income": 0.0,
+      "yield_income": 0.0,
+      "referral_income": 0.0,
+      "deposits": null,
+      "withdrawals": null,
+      "realized_pnl": 865.012031,
+      "wallet_income": 0.0,
+      "position_pnl": 862.489531,
+      "settled_pnl": 865.012031,
+      "economic_pnl": 862.489531,
+      "trade_pnl": 1451.874411,
+      "sponsored_income": 0.0,
+      "fees": -589.38488,
+      "fees_paid": -589.38488,
+      "cashflow_net": null,
+      "volume": 26067.690132,
+      "volume_usdc": 13486.529867,
+      "trade_count": 594
+    }
+  }
+}

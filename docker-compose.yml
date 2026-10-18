@@ -1,0 +1,24 @@
+services:
+  arbot:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      BOT_MODE: ${BOT_MODE:-dashboard}
+      BOT_INITIAL_MODE: ${BOT_INITIAL_MODE:-paper}
+      BOT_STRATEGY: arbitrage
+      DASHBOARD_USER: ${DASHBOARD_USER:-admin}
+      DASHBOARD_TOKEN: ${DASHBOARD_TOKEN:?Set DASHBOARD_TOKEN to at least 16 characters}
+      POLY_SIGNATURE_TYPE: ${POLY_SIGNATURE_TYPE:-3}
+      POLY_PRIVATE_KEY: ${POLY_PRIVATE_KEY:-}
+      POLY_FUNDER: ${POLY_FUNDER:-}
+      LIVE_KILL: ${LIVE_KILL:-1}
+      RELAYER_API_KEY: ${RELAYER_API_KEY:-}
+      RELAYER_API_KEY_ADDRESS: ${RELAYER_API_KEY_ADDRESS:-}
+      PAPER_BUDGET: ${PAPER_BUDGET:-1000}
+    volumes:
+      - arbot-data:/data
+
+volumes:
+  arbot-data:

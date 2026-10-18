@@ -1,0 +1,173 @@
+{
+  "wallet": "0x943cea746e701823b6902a6f4eaeed58207e77c2",
+  "data": {
+    "fills": 21310,
+    "buy_fills": 20703,
+    "sell_fills": 607,
+    "unique_markets": 2704,
+    "first_trade_utc": "2026-07-03T22:23:32+00:00",
+    "last_trade_utc": "2026-10-03T10:39:17+00:00",
+    "market_types": {
+      "btc-updown-5m": 1877,
+      "bitcoin-up-or-down-july-3-2026-7pm": 1,
+      "sol-updown-5m": 93,
+      "btc-updown-15m": 629,
+      "sol-updown-15m": 13,
+      "eth-updown-5m": 37,
+      "bitcoin-up-or-down-july-5-2026-8am": 1,
+      "bnb-updown-5m": 7,
+      "bitcoin-up-or-down-july-11-2026-12am": 1,
+      "bitcoin-up-or-down-july-11-2026-7am": 1,
+      "bnb-up-or-down-july-13-2026-7am": 1,
+      "xrp-updown-5m": 16,
+      "doge-updown-5m": 10,
+      "xrp-updown-15m": 2,
+      "bitcoin-up-or-down-july-30-2026-9am": 1,
+      "eth-updown-15m": 6,
+      "bitcoin-up-or-down-july-31-2026-12am": 1,
+      "bitcoin-up-or-down-august-4-2026-12am": 1,
+      "bitcoin-up-or-down-august-13-2026-8am": 1,
+      "lol-t1-dnf-2026-08": 1,
+      "dota2-ty-ts8-2026-08-22-game-handicap-home": 1,
+      "dota2-ty-ts8-2026-08": 1,
+      "dota2-vsn2-ts8-2026-08": 1,
+      "epl-new-liv-2026-08-23": 1
+    }
+  },
+  "official_profile_stats": {
+    "proxy_wallet": "0x943cea746e701823b6902a6f4eaeed58207e77c2",
+    "trades": 2435,
+    "biggest_win": 1013.411419,
+    "views": 2,
+    "join_date": 1783090943,
+    "all_time_pnl": {
+      "timestamp": 1791024188,
+      "source_block": 94879365,
+      "realized_market_pnl": 20833.859249,
+      "realized_lp_pnl": 0.0,
+      "realized_combo_pnl": 0.0,
+      "unrealized_pnl": 0.0,
+      "fees_refunded": 0.0,
+      "maker_rebate": 2.4914,
+      "taker_rebate": 285.592,
+      "reward_income": 0.0,
+      "yield_income": 0.0,
+      "referral_income": 0.0,
+      "deposits": null,
+      "withdrawals": null,
+      "realized_pnl": 20833.859249,
+      "wallet_income": 288.0834,
+      "position_pnl": 20833.859249,
+      "settled_pnl": 21121.942649,
+      "economic_pnl": 21121.942649,
+      "trade_pnl": 27084.847159,
+      "sponsored_income": 0.0,
+      "fees": -6250.98791,
+      "fees_paid": -6250.98791,
+      "cashflow_net": null,
+      "volume": 486748.108475,
+      "volume_usdc": 224617.950264,
+      "trade_count": 21232
+    }
+  },
+  "cashflow_crosscheck": {
+    "buy_cost_from_public_fills": 217481.8966669848,
+    "sell_receipts_from_public_fills": 8199.529673031186,
+    "non_trade_activity_usdc": {
+      "REDEEM": 229348.71569799999,
+      "MAKER_REBATE": 2.4914,
+      "MERGE": 7248.730169999999,
+      "TAKER_REBATE": 470.9470999999998
+    },
+    "approximate_public_ledger_net": 27788.51737404635,
+    "warning": "The activity ledger and v2 profile statistics use different attribution and fee fields."
+  },
+  "observed_behavior": {
+    "markets_buying_both_outcomes": 980,
+    "markets_with_any_sell": 171,
+    "markets_with_observed_redemption": 2054,
+    "buy_cost_usdc": {
+      "p10": 3.45,
+      "p25": 8.7336,
+      "median": 28.849999999999998,
+      "p75": 89.6,
+      "p90": 198.2983
+    },
+    "buy_fills_per_market": {
+      "p10": 1,
+      "p25": 2,
+      "median": 4,
+      "p75": 9,
+      "p90": 18
+    },
+    "first_entry_offset_s": {
+      "p10": 28,
+      "p25": 61,
+      "median": 145,
+      "p75": 245,
+      "p90": 640
+    },
+    "last_entry_offset_s": {
+      "p10": 74,
+      "p25": 157,
+      "median": 248,
+      "p75": 298,
+      "p90": 795
+    },
+    "first_selected_outcome_win_rate_labeled": 0.5673407096528043,
+    "largest_cost_outcome_win_rate_labeled": 0.6280045784051889,
+    "direct_winner_labels": 2049,
+    "total_labels_including_inferred_losses": 2621,
+    "position_rows_currently_showing_zero_value": 286,
+    "position_rows_gross_initial_value": 7410.664291
+  },
+  "replica_rule": {
+    "asset": "eth",
+    "description": "At 55-60 seconds remaining in ETH 5m, follow Kraken only when the move from the interval open is at least 5bp, the prior completed minute has the same sign, and the matching Polymarket ask is 0.68-0.77 with fee-adjusted edge.",
+    "train_first_67_percent": {
+      "eligible_labeled_markets": 19,
+      "signals": 6,
+      "wins": 5,
+      "win_rate": 0.8333333333333334,
+      "wilson_95_lower": 0.4364905634363539,
+      "signals_per_calendar_day_in_wallet_sample": 0.22131147540983606,
+      "direct_redeem_labels": 5,
+      "inferred_loss_labels": 1
+    },
+    "chronological_holdout_last_33_percent": {
+      "eligible_labeled_markets": 9,
+      "signals": 5,
+      "wins": 4,
+      "win_rate": 0.8,
+      "wilson_95_lower": 0.37552826411853885,
+      "signals_per_calendar_day_in_wallet_sample": 0.08262091915772563,
+      "direct_redeem_labels": 3,
+      "inferred_loss_labels": 2
+    },
+    "train_move_probability_buckets": [
+      {
+        "min_move_bp": 5.0,
+        "max_move_bp": 7.5,
+        "samples": 2,
+        "wins": 1,
+        "probability_lower": 0.09452865480086611
+      },
+      {
+        "min_move_bp": 7.5,
+        "max_move_bp": null,
+        "samples": 4,
+        "wins": 4,
+        "probability_lower": 0.5100999795960008
+      }
+    ],
+    "split_timestamp_utc": "2026-08-03T10:20:00+00:00",
+    "execution": "one fixed-size entry, no opposite-side averaging, no martingale, hold to resolution"
+  },
+  "limits": [
+    "Public fills reveal actions, not the trader's private signal or resting-order intent.",
+    "Loss labels without a redemption are inferred only for single-sided, unsold positions; direct and inferred counts are separated.",
+    "The wallet selected which markets to trade, so this is not an all-market randomized backtest.",
+    "One-minute Kraken candles cannot recreate sub-minute fills, order-book queues, latency, fees, or executable asks.",
+    "The deployed ask range has only sparse historical price proxies; live profitability is not established."
+  ]
+}

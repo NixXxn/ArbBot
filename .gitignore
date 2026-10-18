@@ -1,0 +1,17 @@
+/target
+.env
+.env.*
+!.env.example
+*.jsonl
+*.pyc
+credential-check.json
+validation-report.json
+session-analysis.json
+__pycache__/
+.venv/
+logs/
+data/
+live-*.json
+research/data/
+market_log*.txt
+src/market_log*.txt
