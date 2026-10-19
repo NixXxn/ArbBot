@@ -216,13 +216,18 @@ class Supervisor:
                 str(self.paper_budget),
                 str(STATS_RESET_FILE),
             ]
-        # Live: real CLOB FOK arb via run_arb_live (LIVE_KILL must be 0).
+        # Live: real orders via strategy-specific runner (LIVE_KILL must be 0).
         env_path = os.environ.get("BOT_ENV_PATH", ".env")
         state = getattr(self, "live_state_path", None) or (DATA_DIR / "replica-live-state.json")
+        live_runner = {
+            "arbitrage": "run_arb_live.py",
+            "cross_venue": "run_cross_live.py",
+            "combined": "run_combined_live.py",
+        }.get(self.strategy, "run_arb_live.py")
         command = [
             sys.executable, "-u", str(scripts / "bounded_console.py"),
             str(DATA_DIR / "replica-console.log"),
-            sys.executable, "-u", str(scripts / "run_arb_live.py"),
+            sys.executable, "-u", str(scripts / live_runner),
             str(DATA_DIR),
             str(state),
             str(env_path),
@@ -537,7 +542,13 @@ class Supervisor:
             result["live_state_file"] = live_state_path.name
         paper_mode = result["current_mode"] == "paper" or result["desired_mode"] == "paper"
         live_mode = result["current_mode"] == "live" or result["desired_mode"] == "live"
-        result["live_execution"] = "clob" if live_mode else None
+        if live_mode:
+            result["live_execution"] = {
+                "cross_venue": "cross_clob_kalshi",
+                "combined": "clob+cross",
+            }.get(self.strategy, "clob")
+        else:
+            result["live_execution"] = None
         health_by_asset, fills = {}, []
         labels = active_feeds(self.strategy)
         paper = read_json(DATA_DIR / "replica-paper-portfolio.json") or {}
@@ -623,6 +634,9 @@ class Supervisor:
                 if fill:
                     result["latest_paper_fill"] = fill
         if live_mode and result["desired_mode"] == "live":
+            cross_live = read_json(DATA_DIR / "replica-live-cross-portfolio.json") or {}
+            if self.strategy == "cross_venue" and cross_live:
+                durable = cross_live
             # Prefer live worker snapshot (wallet capital); fall back to durable / paper.
             live_pf = ((live_state or {}).get("portfolio")
                        or durable.get("portfolio")
@@ -630,10 +644,16 @@ class Supervisor:
                            ("capital", "equity", "available", "open_exposure",
                             "max_exposure", "exposure_rate")}
                        or {})
-            # durable file may be the portfolio itself (run_arb_live writes full portfolio)
+            # durable file may be the portfolio itself (run_arb_live / run_cross_live)
             if not live_pf.get("equity") and not live_pf.get("capital"):
                 if durable.get("equity") is not None or durable.get("capital") is not None:
                     live_pf = durable
+            if self.strategy in ("cross_venue", "combined"):
+                result["kalshi_authenticated"] = (
+                    (live_state or {}).get("kalshi_authenticated")
+                    or cross_live.get("kalshi_authenticated")
+                    or durable.get("kalshi_authenticated")
+                )
             result["strategy_stats"] = (
                 (live_state or {}).get("strategy_stats")
                 or durable.get("strategy_stats")

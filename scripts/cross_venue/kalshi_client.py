@@ -5,6 +5,7 @@ import base64
 import logging
 import os
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,10 @@ import requests
 log = logging.getLogger("arbot.cross.kalshi")
 
 DEFAULT_BASE = "https://api.elections.kalshi.com/trade-api/v2"
+
+
+class KalshiOrderError(RuntimeError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -156,7 +161,15 @@ class KalshiClient:
             "KALSHI-ACCESS-SIGNATURE": base64.b64encode(signature).decode("utf-8"),
         }
 
-    def request(self, method: str, path: str, *, params: dict | None = None, auth: bool = False) -> Any:
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict | None = None,
+        json_body: dict | None = None,
+        auth: bool = False,
+    ) -> Any:
         if not path.startswith("/"):
             path = "/" + path
         url = self.base_url + path
@@ -166,13 +179,119 @@ class KalshiClient:
             # base_url already ends with /trade-api/v2; sign that full API path.
             sign_path = "/trade-api/v2" + path
         headers = {"Accept": "application/json", "User-Agent": "Arbot-CrossVenue/1.0"}
-        if auth or (method.upper() != "GET"):
+        need_auth = auth or json_body is not None or method.upper() in ("POST", "PUT", "DELETE", "PATCH")
+        if need_auth:
+            if not self.authenticated:
+                raise KalshiOrderError("Kalshi credentials missing (KALSHI_KEY_ID / KALSHI_PK)")
             headers.update(self._sign_headers(method, sign_path))
-        response = self.session.request(method, url, params=params, headers=headers, timeout=25)
-        response.raise_for_status()
+        if json_body is not None:
+            headers["Content-Type"] = "application/json"
+        response = self.session.request(
+            method, url, params=params, json=json_body, headers=headers, timeout=30
+        )
+        if response.status_code >= 400:
+            detail = response.text[:300]
+            raise KalshiOrderError(f"Kalshi HTTP {response.status_code}: {detail}")
         if not response.content:
             return {}
         return response.json()
+
+    def balance_dollars(self) -> float:
+        data = self.request("GET", "/portfolio/balance", auth=True)
+        if data.get("balance_dollars") is not None:
+            return float(data["balance_dollars"])
+        # Legacy field is integer cents.
+        return float(data.get("balance") or 0) / 100.0
+
+    def buy_ioc(
+        self,
+        ticker: str,
+        side: str,
+        count: int,
+        price: float,
+        *,
+        client_order_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Immediate-or-cancel buy of YES or NO contracts. Returns fill summary."""
+        side = side.lower().strip()
+        if side not in ("yes", "no"):
+            raise KalshiOrderError("side must be yes or no")
+        count = int(count)
+        if count < 1:
+            raise KalshiOrderError("count must be >= 1")
+        if not 0 < price < 1:
+            raise KalshiOrderError("price must be in (0,1)")
+        body: dict[str, Any] = {
+            "ticker": ticker,
+            "action": "buy",
+            "side": side,
+            "count": count,
+            "time_in_force": "immediate_or_cancel",
+            "client_order_id": client_order_id or str(uuid.uuid4()),
+        }
+        px = f"{float(price):.4f}"
+        if side == "yes":
+            body["yes_price_dollars"] = px
+        else:
+            body["no_price_dollars"] = px
+        data = self.request("POST", "/portfolio/orders", json_body=body, auth=True)
+        order = data.get("order") if isinstance(data.get("order"), dict) else data
+        filled = int(float(order.get("fill_count") or order.get("fill_count_fp") or 0))
+        remaining = int(float(order.get("remaining_count") or order.get("remaining_count_fp") or 0))
+        avg = float(price)
+        # Prefer explicit fill price fields when present.
+        for key in ("yes_price_dollars", "no_price_dollars", "yes_price", "no_price"):
+            if order.get(key) is not None:
+                try:
+                    raw = float(order[key])
+                    avg = raw / 100.0 if raw > 1.0 else raw
+                    break
+                except (TypeError, ValueError):
+                    pass
+        return {
+            "ok": filled > 0,
+            "order_id": order.get("order_id") or order.get("id"),
+            "client_order_id": body["client_order_id"],
+            "filled": filled,
+            "remaining": remaining,
+            "avg_price": avg,
+            "side": side,
+            "ticker": ticker,
+            "raw": order,
+        }
+
+    def sell_ioc(self, ticker: str, side: str, count: int, price: float) -> dict[str, Any]:
+        """IOC sell to unwind (side = held contract side)."""
+        side = side.lower().strip()
+        count = int(count)
+        if count < 1:
+            raise KalshiOrderError("count must be >= 1")
+        body: dict[str, Any] = {
+            "ticker": ticker,
+            "action": "sell",
+            "side": side,
+            "count": count,
+            "time_in_force": "immediate_or_cancel",
+            "client_order_id": str(uuid.uuid4()),
+        }
+        px = f"{max(0.01, float(price)):.4f}"
+        if side == "yes":
+            body["yes_price_dollars"] = px
+        else:
+            body["no_price_dollars"] = px
+        data = self.request("POST", "/portfolio/orders", json_body=body, auth=True)
+        order = data.get("order") if isinstance(data.get("order"), dict) else data
+        filled = int(float(order.get("fill_count") or order.get("fill_count_fp") or 0))
+        return {
+            "ok": filled > 0,
+            "order_id": order.get("order_id") or order.get("id"),
+            "filled": filled,
+            "avg_price": float(price),
+            "raw": order,
+        }
+
+    def cancel_order(self, order_id: str) -> dict[str, Any]:
+        return self.request("DELETE", f"/portfolio/orders/{order_id}", auth=True)
 
     def list_markets(self, *, limit: int = 200, status: str = "open") -> list[KalshiMarket]:
         out: list[KalshiMarket] = []

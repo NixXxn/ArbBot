@@ -27,8 +27,9 @@ pairs.
 Matches equivalent binaries (explicit `mapped_pairs` in `config/cross_venue.yaml`
 and/or fuzzy title score). Buys complementary YES/NO across venues when
 `ask_poly + ask_kalshi + fee_buffer < 1 - min_edge`. Paper fills by default.
-Set `KALSHI_KEY_ID` and `KALSHI_PK` (PEM file path or full PEM). A short opaque
-`KALSHI_PK` string is not enough — use the downloaded private key PEM.
+Set `KALSHI_KEY_ID` and `KALSHI_PK` (PEM / Ed25519 key material). Live mode
+(`LIVE_KILL=0` + strategy `cross_venue`) runs `run_cross_live.py`: Polymarket FOK
++ Kalshi IOC on complementary legs, unwind on hedge miss.
 
 Shared infrastructure kept: order helpers (`live_executor.py`), session risk,
 portfolio controls, logging, paper persistence, dashboard supervisor.

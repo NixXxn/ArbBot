@@ -247,7 +247,7 @@ class DashboardTests(TestCase):
         self.assertEqual(result["portfolio"]["capital"],100)
         self.assertEqual(result["portfolio"]["equity"],100)
         self.assertEqual(result["portfolio"]["open_exposure"],6)
-        self.assertEqual(result["live_execution"],"clob")
+        self.assertEqual(result["live_execution"],"clob+cross")
 
     def test_live_mode_shows_wallet_portfolio(self):
         """Live CLOB worker writes replica-portfolio-live; capital must surface."""
@@ -339,8 +339,8 @@ class DashboardTests(TestCase):
         self.assertEqual(result["current_mode"], "live")
         self.assertEqual(result["recovery_states"], ["replica-live-old.json"])
         command = popen.call_args.args[0]
-        self.assertTrue(any("run_arb_live.py" in str(part) for part in command))
-        # Recovery paths stay visible; live worker places real CLOB arb orders.
+        self.assertTrue(any("run_combined_live.py" in str(part) for part in command))
+        # Recovery paths stay visible; live worker places real CLOB + Kalshi orders.
         self.assertTrue(any(str(supervisor.live_state_path) == str(part) for part in command))
 
     def test_failed_live_worker_exposes_actionable_error(self):

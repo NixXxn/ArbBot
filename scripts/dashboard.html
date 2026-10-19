@@ -186,11 +186,17 @@ async function status(){
     $('files').innerHTML=(s.files||[]).map(f=>`<option value="${esc(f.name)}" ${f.name===selected?'selected':''}>${esc(f.name)} · ${(f.size/1024).toFixed(1)} KiB</option>`).join('');
     $('download').href='/api/download?name='+encodeURIComponent(selected);
     if(actionError)$('message').textContent=actionError;
+    else if(!s.live_enabled && (s.strategy==='cross_venue'||s.strategy==='combined'))
+      $('message').textContent=`Cross-venue ready (paper). LIVE_KILL=1. Kalshi auth: ${s.kalshi_authenticated?'ok':'set KALSHI_KEY_ID + KALSHI_PK'}. Live buys Poly FOK + Kalshi IOC on both legs, unwinds on hedge miss.`;
     else if(s.strategy==='cross_venue'||s.strategy==='combined')
-      $('message').textContent=`Cross-venue Poly↔Kalshi: match by mapped pairs or title score, buy complementary YES/NO across venues when cost+fees < $1. Paper fills only for now. Kalshi auth: ${s.kalshi_authenticated?'ok':'missing/invalid KALSHI_PK (need PEM or path)'}.`;
+      $('message').textContent=`Cross-venue Poly↔Kalshi ${s.current_mode==='live'?'LIVE':'paper'}: complementary YES/NO across venues. Kalshi auth: ${s.kalshi_authenticated?'ok':'missing'}.`;
     else if(!s.live_enabled)$('message').textContent=`LIVE_KILL=1: live locked. Locked profits are fee-aware matched pairs only; expected is pre-hedge; unpaired is directional risk.`;
-    else if(s.live_execution==='clob'&&(s.current_mode==='live'||s.desired_mode==='live'))
-      $('message').textContent=`Live CLOB arb: FOK when ask_sum is cheap; resting maker limits (sum≤max_pair_cost) when asks are up to max_maker_ask_sum. Merge on pair; unwind on hedge miss. Capital is wallet collateral.`;
+    else if((s.live_execution==='clob'||s.live_execution==='clob+cross'||s.live_execution==='cross_clob_kalshi')&&(s.current_mode==='live'||s.desired_mode==='live'))
+      $('message').textContent=s.live_execution==='cross_clob_kalshi'
+        ?`Live cross: Poly FOK + Kalshi IOC on complementary legs; unwind on hedge miss. Capital is wallet + Kalshi balance.`
+        :s.live_execution==='clob+cross'
+        ?`Live combined: Poly pair-arb CLOB + cross-venue Poly↔Kalshi. Non-atomic fills can leave unpaired inventory.`
+        :`Live CLOB arb: FOK when ask_sum is cheap; resting maker limits (sum≤max_pair_cost) when asks are up to max_maker_ask_sum. Merge on pair; unwind on hedge miss. Capital is wallet collateral.`;
     else $('message').textContent=`Live unlocked. Non-atomic fills can leave unpaired inventory.`;
     if(selected)await loadLog();
   }catch(e){$('clock').textContent='Dashboard error';$('message').textContent=e.message}

@@ -9,9 +9,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from arbitrage.discovery import ArbMarket
 from cross_venue.config import CrossConfig, MappedPair, load_cross_config
-from cross_venue.kalshi_client import KalshiBook, KalshiMarket
+from cross_venue.executor import CrossExecutor
+from cross_venue.kalshi_client import KalshiBook, KalshiClient, KalshiMarket
 from cross_venue.match import match_markets, normalize_title, title_score
-from cross_venue.strategy import CrossEngine
+from cross_venue.strategy import CrossEngine, CrossIntent, CrossOpportunity
 
 
 def test_normalize_and_score():
@@ -80,3 +81,51 @@ def test_dashboard_accepts_cross_strategy():
     assert dashboard_server.normalize_strategy("cross_venue") == "cross_venue"
     assert dashboard_server.normalize_strategy("combined") == "combined"
     assert dashboard_server.active_feeds("combined") == ("arbitrage", "cross_venue")
+
+
+def test_kalshi_buy_ioc_payload(monkeypatch):
+    from cross_venue.kalshi_client import KalshiClient
+
+    client = KalshiClient()
+    client.key_id = "kid"
+    client._private_key = object()  # mark authenticated
+    captured = {}
+
+    def fake_request(method, path, *, params=None, json_body=None, auth=False):
+        captured["method"] = method
+        captured["path"] = path
+        captured["body"] = json_body
+        return {"order": {"order_id": "o1", "fill_count": 3, "remaining_count": 0, "yes_price_dollars": "0.4100"}}
+
+    monkeypatch.setattr(client, "request", fake_request)
+    monkeypatch.setattr(type(client), "authenticated", property(lambda self: True))
+    out = client.buy_ioc("TICK", "yes", 3, 0.41)
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/portfolio/orders"
+    assert captured["body"]["time_in_force"] == "immediate_or_cancel"
+    assert captured["body"]["yes_price_dollars"] == "0.4100"
+    assert out["filled"] == 3
+    assert out["ok"] is True
+
+
+def test_cross_executor_paper():
+    cfg = CrossConfig(paper_mode=True, fee_buffer=0.01)
+    opp = CrossOpportunity(
+        pair_id="p::k::poly_yes_kalshi_no",
+        poly_slug="p", kalshi_ticker="k", direction="poly_yes_kalshi_no",
+        poly_leg="yes", kalshi_leg="no", poly_token="t",
+        poly_ask=0.4, kalshi_ask=0.5, cost=0.91, edge=0.09, shares=10,
+        match_score=1.0, match_source="mapped", question="q",
+    )
+    # Explicit paper poly client so we don't open network sockets.
+    from arbitrage.config import ArbConfig
+    from arbitrage.executor_bridge import PaperBookClient
+
+    ex = CrossExecutor(
+        cfg, KalshiClient(), poly_client=PaperBookClient(ArbConfig(paper_mode=True)),
+    )
+    result = ex.execute(CrossIntent(kind="enter", opportunity=opp))
+    assert result.ok
+    assert result.shares == 10
+    # settlement $1 − (poly+kalshi asks) − fee_buffer
+    assert abs(result.net_pnl - (10 - 10 * 0.9 - 0.1)) < 1e-9
