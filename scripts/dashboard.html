@@ -44,6 +44,13 @@
       <label for="paperBudget" class="label">Paper budget ($)</label>
       <input id="paperBudget" type="number" min="16" max="1000000" step="1">
       <button id="saveBudget">Apply budget</button>
+      <label for="strategy" class="label">Strategy</label>
+      <select id="strategy">
+        <option value="arbitrage">Polymarket pair arb</option>
+        <option value="cross_venue">Cross-venue (Poly ↔ Kalshi)</option>
+        <option value="combined">Combined</option>
+      </select>
+      <button id="saveStrategy">Apply strategy</button>
     </div>
     <div id="message" class="note" style="margin-top:10px"></div>
   </section>
@@ -118,6 +125,14 @@ function fillSettings(cfg){
 function renderPairs(pairs){
   const rows=(pairs||[]).slice().reverse().slice(0,40);
   $('pairs').innerHTML=rows.map(p=>{
+    if(p.kalshi_ticker){
+      return `<tr>
+        <td>${esc(p.slug)} ↔ ${esc(p.kalshi_ticker)}</td><td>${esc(p.status||'matched')}</td>
+        <td colspan="4">${esc((p.question||'').slice(0,64))}</td>
+        <td colspan="4">score ${esc(num(p.match_score))} · ${esc(p.source||'')}</td>
+        <td>—</td><td>—</td><td>—</td><td>—</td>
+      </tr>`;
+    }
     const age=p.unpaired_age_s==null?'—':Number(p.unpaired_age_s).toFixed(0)+'s';
     return `<tr>
       <td>${esc(p.slug)}</td><td>${esc(p.status)}</td>
@@ -129,8 +144,16 @@ function renderPairs(pairs){
 }
 
 function renderPerf(stats){
-  const x=stats.arbitrage||stats.combined||{};
-  $('performance').innerHTML=`<tr><td>Arbitrage</td><td>${esc(x.trades??0)}</td><td>${esc(x.open??0)}</td><td>${esc(x.settled??0)}</td><td>${esc(pct(x.win_rate))}</td><td>${money(x.pnl)}</td><td>${esc(pct(x.roi))}</td></tr>`;
+  const rows=[];
+  for(const [name,label] of [['arbitrage','Arbitrage'],['cross_venue','Cross-venue'],['combined','Combined']]){
+    const x=stats[name]; if(!x) continue;
+    rows.push(`<tr><td>${label}</td><td>${esc(x.trades??0)}</td><td>${esc(x.open??0)}</td><td>${esc(x.settled??0)}</td><td>${esc(pct(x.win_rate))}</td><td>${money(x.pnl)}</td><td>${esc(pct(x.roi))}</td></tr>`);
+  }
+  if(!rows.length){
+    const x=stats.arbitrage||stats.combined||{};
+    rows.push(`<tr><td>Arbitrage</td><td>${esc(x.trades??0)}</td><td>${esc(x.open??0)}</td><td>${esc(x.settled??0)}</td><td>${esc(pct(x.win_rate))}</td><td>${money(x.pnl)}</td><td>${esc(pct(x.roi))}</td></tr>`);
+  }
+  $('performance').innerHTML=rows.join('');
 }
 
 async function status(){
@@ -141,9 +164,10 @@ async function status(){
     const br=s.pnl_breakdown||{};
     $('clock').textContent=new Date().toLocaleString();
     if(document.activeElement!==$('paperBudget'))$('paperBudget').value=s.paper_budget??1000;
+    if(document.activeElement!==$('strategy')&&s.strategy)$('strategy').value=s.strategy;
     $('mode').innerHTML=`<span class="${s.current_mode==='live'?'bad':'ok'}">${esc(s.current_mode||'stopped')}</span>${s.transition?' → '+esc(s.desired_mode):''}`;
     $('worker').innerHTML=s.worker_running?`<span class="ok">running</span> · ${s.worker_pid}`:'<span class="bad">stopped</span>';
-    const total=stats.combined||stats.arbitrage||{};
+    const total=stats.combined||stats.arbitrage||stats.cross_venue||{};
     $('pnl').innerHTML=money(total.pnl);
     const capital=portfolio.equity??portfolio.capital;
     $('capital').textContent=capital!=null?`$${Number(capital).toFixed(2)}`:'—';
@@ -162,12 +186,24 @@ async function status(){
     $('files').innerHTML=(s.files||[]).map(f=>`<option value="${esc(f.name)}" ${f.name===selected?'selected':''}>${esc(f.name)} · ${(f.size/1024).toFixed(1)} KiB</option>`).join('');
     $('download').href='/api/download?name='+encodeURIComponent(selected);
     if(actionError)$('message').textContent=actionError;
+    else if(s.strategy==='cross_venue'||s.strategy==='combined')
+      $('message').textContent=`Cross-venue Poly↔Kalshi: match by mapped pairs or title score, buy complementary YES/NO across venues when cost+fees < $1. Paper fills only for now. Kalshi auth: ${s.kalshi_authenticated?'ok':'missing/invalid KALSHI_PK (need PEM or path)'}.`;
     else if(!s.live_enabled)$('message').textContent=`LIVE_KILL=1: live locked. Locked profits are fee-aware matched pairs only; expected is pre-hedge; unpaired is directional risk.`;
     else if(s.live_execution==='clob'&&(s.current_mode==='live'||s.desired_mode==='live'))
       $('message').textContent=`Live CLOB arb: FOK when ask_sum is cheap; resting maker limits (sum≤max_pair_cost) when asks are up to max_maker_ask_sum. Merge on pair; unwind on hedge miss. Capital is wallet collateral.`;
     else $('message').textContent=`Live unlocked. Non-atomic fills can leave unpaired inventory.`;
     if(selected)await loadLog();
   }catch(e){$('clock').textContent='Dashboard error';$('message').textContent=e.message}
+}
+
+async function setStrategy(){
+  try{
+    actionError='';
+    const strategy=$('strategy').value;
+    await api('/api/strategy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({strategy})});
+    $('message').textContent=`Strategy set to ${strategy}`;
+    await status();
+  }catch(e){actionError=e.message;await status()}
 }
 
 async function loadLog(){
@@ -220,6 +256,7 @@ async function resetStats(){
 $('paper').onclick=()=>setMode('paper');
 $('live').onclick=()=>setMode('live');
 $('saveBudget').onclick=saveBudget;
+$('saveStrategy').onclick=setStrategy;
 $('saveArb').onclick=saveArb;
 $('resetAllStats').onclick=resetStats;
 $('refresh').onclick=status;

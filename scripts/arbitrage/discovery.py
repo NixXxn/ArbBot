@@ -132,13 +132,16 @@ def discover_markets(cfg: ArbConfig, *, session: requests.Session | None = None)
                 continue
             preferred = any(m in blob for m in _PREFERRED_MARKERS)
             end_ms = None
-            for key in ("endDate", "end_date_iso", "endDateIso"):
+            for key in ("endDate", "end_date_iso", "endDateIso", "closedTime"):
                 raw = market.get(key)
                 if not raw:
                     continue
                 try:
-                    # Gamma often returns ISO; leave None if unparsable.
-                    end_ms = None
+                    from datetime import datetime, timezone
+
+                    text = str(raw).replace("Z", "+00:00")
+                    end_ms = int(datetime.fromisoformat(text).astimezone(timezone.utc).timestamp() * 1000)
+                    break
                 except Exception:
                     end_ms = None
             results.append(

@@ -15,11 +15,20 @@ pairs.
 
 - Removed Kraken / Up-60 / pre-open / clip / early3m directional strategies from
   the dashboard and worker spawn path.
-- Single selectable strategy: **arbitrage**.
-- Paper runner: `scripts/run_arb_paper.py`.
-- Core logic: `scripts/arbitrage/`.
+- Strategies: **arbitrage** (Polymarket YES/NO), **cross_venue** (Polymarket ↔ Kalshi),
+  or **combined**.
+- Paper runners: `scripts/run_arb_paper.py`, `scripts/run_cross_paper.py`.
+- Core logic: `scripts/arbitrage/`, `scripts/cross_venue/`.
 - Dashboard branded **Arbot** with pair status, fees, expected vs locked vs
   unpaired risk, and editable arb settings.
+
+### Cross-venue (Polymarket ↔ Kalshi)
+
+Matches equivalent binaries (explicit `mapped_pairs` in `config/cross_venue.yaml`
+and/or fuzzy title score). Buys complementary YES/NO across venues when
+`ask_poly + ask_kalshi + fee_buffer < 1 - min_edge`. Paper fills by default.
+Set `KALSHI_KEY_ID` and `KALSHI_PK` (PEM file path or full PEM). A short opaque
+`KALSHI_PK` string is not enough — use the downloaded private key PEM.
 
 Shared infrastructure kept: order helpers (`live_executor.py`), session risk,
 portfolio controls, logging, paper persistence, dashboard supervisor.

@@ -140,10 +140,12 @@ class DashboardTests(TestCase):
         self.assertEqual(result["paper_budget"], 500.0)
         self.assertTrue(resets["arbitrage"] > 0)
 
-    def test_strategy_is_arbitrage_only(self):
-        self.assertEqual(dashboard_server.normalize_strategy("all"), "arbitrage")
+    def test_strategy_aliases(self):
+        self.assertEqual(dashboard_server.normalize_strategy("all"), "combined")
         self.assertEqual(dashboard_server.normalize_strategy("arb"), "arbitrage")
+        self.assertEqual(dashboard_server.normalize_strategy("cross"), "cross_venue")
         self.assertEqual(dashboard_server.active_feeds("arbitrage"), ("arbitrage",))
+        self.assertEqual(dashboard_server.active_feeds("combined"), ("arbitrage", "cross_venue"))
         with self.assertRaisesRegex(ValueError, "arbitrage"):
             dashboard_server.normalize_strategy("kraken")
 

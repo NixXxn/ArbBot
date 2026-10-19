@@ -132,12 +132,20 @@ def recent_events(path: Path) -> tuple[dict | None, dict | None]:
 
 
 def normalize_strategy(value):
-    if value in ("arbitrage", "arb", "all", "combined", None, ""):
+    if value in ("arbitrage", "arb", None, ""):
         return "arbitrage"
-    raise ValueError("Strategy must be arbitrage (only active strategy)")
+    if value in ("cross_venue", "cross", "kalshi"):
+        return "cross_venue"
+    if value in ("combined", "all"):
+        return "combined"
+    raise ValueError("Strategy must be arbitrage, cross_venue, or combined")
 
 
 def active_feeds(strategy):
+    if strategy == "cross_venue":
+        return ("cross_venue",)
+    if strategy == "combined":
+        return ("arbitrage", "cross_venue")
     return ("arbitrage",)
 
 
@@ -191,15 +199,20 @@ class Supervisor:
             scripts = Path(__file__).resolve().parent
             app_root = scripts.parent
         if mode == "paper":
+            runner = {
+                "arbitrage": "run_arb_paper.py",
+                "cross_venue": "run_cross_paper.py",
+                "combined": "run_combined_paper.py",
+            }.get(self.strategy, "run_arb_paper.py")
             return [
                 sys.executable, "-u", str(scripts / "bounded_console.py"),
                 str(DATA_DIR / "replica-paper-console.log"),
-                sys.executable, "-u", str(scripts / "run_arb_paper.py"),
+                sys.executable, "-u", str(scripts / runner),
                 str(DATA_DIR),
                 str(app_root / "leadlag"),
                 str(app_root),
                 "31536000",
-                "arbitrage",
+                self.strategy,
                 str(self.paper_budget),
                 str(STATS_RESET_FILE),
             ]
@@ -264,7 +277,7 @@ class Supervisor:
     def _reset_all_statistics(self) -> None:
         baselines = read_json(STATS_RESET_FILE) or {}
         now = int(time.time() * 1000)
-        for strategy in ("arbitrage",):
+        for strategy in ("arbitrage", "cross_venue"):
             baselines[strategy] = now
         atomic_json(STATS_RESET_FILE, baselines)
 
@@ -553,23 +566,60 @@ class Supervisor:
             result["engine_health_by_asset"] = health_by_asset
             result["engine_health"] = aggregate
             result["latest_paper_fill"] = max(fills, key=lambda row: row[0])[1] if fills else None
-            result["strategy_stats"] = paper.get("strategy_stats", {})
+            result["strategy_stats"] = dict(paper.get("strategy_stats") or {})
             result["portfolio"] = {key: paper.get(key) for key in
                                    ("budget", "equity", "available", "open_exposure",
                                     "max_exposure", "exposure_rate", "capital")}
             result["risk_controls"] = paper.get("risk_controls", {})
-            result["pairs"] = paper.get("pairs", [])
-            result["pnl_breakdown"] = paper.get("pnl_breakdown", {})
+            result["pairs"] = list(paper.get("pairs") or [])
+            result["pnl_breakdown"] = dict(paper.get("pnl_breakdown") or {})
             baked = dict(paper.get("arb_config") or {})
             overlay = read_json(DATA_DIR / "arb-settings.json") or {}
             baked.update({k: v for k, v in overlay.items() if k != "updated_at_ms"})
             result["arb_config"] = baked
-            result["recent_decisions"] = paper.get("recent_decisions", [])
+            result["recent_decisions"] = list(paper.get("recent_decisions") or [])
             arb_journal = DATA_DIR / "replica-paper-arbitrage.jsonl"
             if arb_journal.exists():
                 health, fill = recent_events(arb_journal)
                 if health:
                     result["engine_health_by_asset"] = {"arbitrage": health}
+                if fill:
+                    result["latest_paper_fill"] = fill
+            # Cross-venue paper portfolio (extra strategy).
+            cross = read_json(DATA_DIR / "replica-paper-cross-portfolio.json") or {}
+            if self.strategy in ("cross_venue", "combined") and cross:
+                result["kalshi_authenticated"] = cross.get("kalshi_authenticated")
+                result["cross_config"] = cross.get("cross_config") or {}
+                stats = dict(result.get("strategy_stats") or {})
+                stats.update(cross.get("strategy_stats") or {})
+                result["strategy_stats"] = stats
+                if self.strategy == "cross_venue":
+                    result["portfolio"] = {key: cross.get(key) for key in
+                                           ("budget", "equity", "available", "open_exposure",
+                                            "max_exposure", "exposure_rate", "capital")}
+                    result["pairs"] = cross.get("pairs") or []
+                    result["pnl_breakdown"] = cross.get("pnl_breakdown") or {}
+                    result["recent_decisions"] = cross.get("recent_decisions") or []
+                    if cross.get("engine_health"):
+                        result["engine_health_by_asset"] = cross.get("engine_health")
+                else:
+                    # combined: keep arb capital, append cross pairs/decisions
+                    result["pairs"] = list(result.get("pairs") or []) + list(cross.get("pairs") or [])
+                    result["recent_decisions"] = (
+                        list(result.get("recent_decisions") or [])
+                        + list(cross.get("recent_decisions") or [])
+                    )[-40:]
+                    br = dict(result.get("pnl_breakdown") or {})
+                    cbr = cross.get("pnl_breakdown") or {}
+                    for key in ("realized_pnl", "locked_pair_profit", "expected_profit",
+                                "unpaired_directional_risk"):
+                        br[key] = float(br.get(key) or 0) + float(cbr.get(key) or 0)
+                    result["pnl_breakdown"] = br
+            cross_journal = DATA_DIR / "replica-paper-cross.jsonl"
+            if cross_journal.exists() and self.strategy in ("cross_venue", "combined"):
+                health, fill = recent_events(cross_journal)
+                if health:
+                    result.setdefault("engine_health_by_asset", {})["cross_venue"] = health
                 if fill:
                     result["latest_paper_fill"] = fill
         if live_mode and result["desired_mode"] == "live":
