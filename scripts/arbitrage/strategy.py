@@ -87,8 +87,8 @@ class ArbEngine:
             }
 
         # --- Maker path: asks up to max_maker_ask_sum, limits sum to max_pair_cost ---
-        # Paper: synthetic fill-at-limit. Live: resting GTC limits (same economics).
-        live_maker = (not paper) and bool(getattr(cfg, "live_maker_enabled", True))
+        # Paper: synthetic fill-at-limit. Live resting GTC only when live_maker_enabled.
+        live_maker = (not paper) and bool(getattr(cfg, "live_maker_enabled", False))
         if not ((paper and cfg.paper_fak) or live_maker):
             return {"reject": taker.reason or "not_taker"}
         maker_cap = float(getattr(cfg, "max_maker_ask_sum", 1.04) or 1.04)

@@ -24,12 +24,12 @@
   <section class="grid">
     <div class="card"><div class="label">Mode</div><div class="value" id="mode">—</div></div>
     <div class="card"><div class="label">Worker</div><div class="value" id="worker">—</div></div>
-    <div class="card"><div class="label">Strategy</div><div class="value">Arbitrage</div></div>
+    <div class="card"><div class="label">Strategy</div><div class="value" id="strategyLabel">—</div></div>
     <div class="card"><div class="label">Session P&amp;L</div><div class="value" id="pnl">—</div></div>
     <div class="card"><div class="label">Capital</div><div class="value" id="capital">—</div></div>
     <div class="card"><div class="label">Locked pair profit</div><div class="value" id="locked">—</div></div>
-    <div class="card"><div class="label">Expected profit</div><div class="value" id="expected">—</div></div>
-    <div class="card"><div class="label">Unpaired risk</div><div class="value" id="unpairedRisk">—</div></div>
+    <div class="card"><div class="label">Cross candidates</div><div class="value" id="crossCandidates">—</div></div>
+    <div class="card"><div class="label">Best cross spread</div><div class="value" id="bestSpread">—</div></div>
   </section>
 
   <section class="panel">
@@ -73,6 +73,22 @@
     <div class="note" style="margin-top:8px">Net = $1 payout − both leg costs − fees − slippage. Second-leg max price is derived from the actual first fill. Entries stop on stale quotes or breached risk limits.</div>
   </section>
 
+  <section class="panel" id="crossPanel" style="display:none">
+    <div class="row between">
+      <div>
+        <div class="label">Kalshi ↔ Polymarket candidates</div>
+        <div class="note" id="crossSummary">Spread % = 100 × (1 − poly_ask − kalshi_ask − fee_buffer).</div>
+      </div>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr>
+        <th>Poly slug</th><th>Kalshi</th><th>Direction</th><th>Poly ask</th><th>Kalshi ask</th>
+        <th>Cost</th><th>Spread %</th><th>Score</th><th>Status</th>
+      </tr></thead>
+      <tbody id="crossCandidatesTable"></tbody>
+    </table></div>
+  </section>
+
   <section class="panel">
     <div class="row between"><div class="label">Open / recent pairs</div><button id="resetAllStats">Reset counters</button></div>
     <div class="table-wrap"><table>
@@ -88,7 +104,10 @@
   <section class="panel">
     <div class="label">Performance</div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Strategy</th><th>Trades</th><th>Open</th><th>Settled</th><th>Win rate</th><th>P/L</th><th>ROI</th></tr></thead>
+      <thead><tr>
+        <th>Strategy</th><th>Trades</th><th>Open</th><th>Settled</th><th>Win rate</th><th>P/L</th><th>ROI</th>
+        <th>Candidates</th><th>Eligible</th><th>Best spread</th>
+      </tr></thead>
       <tbody id="performance"></tbody>
     </table></div>
   </section>
@@ -122,17 +141,49 @@ function fillSettings(cfg){
   }
 }
 
+function spreadCell(v){
+  if(v==null||v==='')return '—';
+  const n=Number(v);
+  const cls=n>0?'pos':n<0?'neg':'';
+  return `<span class="${cls}">${n.toFixed(2)}%</span>`;
+}
+
+function renderCrossCandidates(s){
+  const crossActive=s.strategy==='cross_venue'||s.strategy==='combined';
+  $('crossPanel').style.display=crossActive?'':'none';
+  const count=s.candidate_count??(s.candidates||[]).length;
+  const eligible=s.eligible_count;
+  const best=s.best_spread_pct;
+  $('crossCandidates').textContent=crossActive
+    ?(eligible!=null?`${count} · ${eligible} eligible`:`${count}`)
+    :'—';
+  $('bestSpread').innerHTML=crossActive?spreadCell(best):'—';
+  if(!crossActive){
+    $('crossCandidatesTable').innerHTML='';
+    return;
+  }
+  const rows=(s.candidates&&s.candidates.length?s.candidates:s.pairs||[])
+    .filter(p=>p.kalshi_ticker)
+    .slice(0,40);
+  $('crossSummary').textContent=`${count} candidates`+(eligible!=null?`, ${eligible} eligible`:'')
+    +(best!=null?`, best spread ${Number(best).toFixed(2)}%`:'')
+    +'. Spread % = 100 × (1 − poly_ask − kalshi_ask − fee_buffer).';
+  $('crossCandidatesTable').innerHTML=rows.map(p=>`<tr>
+    <td>${esc(p.slug)}</td>
+    <td>${esc(p.kalshi_ticker)}</td>
+    <td>${esc(p.direction||'—')}</td>
+    <td>${esc(num(p.poly_ask))}</td>
+    <td>${esc(num(p.kalshi_ask))}</td>
+    <td>${esc(num(p.cost))}</td>
+    <td>${spreadCell(p.spread_pct)}</td>
+    <td>${esc(num(p.match_score))}</td>
+    <td>${esc(p.status||(p.eligible?'eligible':p.reject)||'—')}</td>
+  </tr>`).join('')||'<tr><td colspan="9">No cross-venue candidates yet (waiting for scan)</td></tr>';
+}
+
 function renderPairs(pairs){
-  const rows=(pairs||[]).slice().reverse().slice(0,40);
+  const rows=(pairs||[]).filter(p=>!p.kalshi_ticker).slice().reverse().slice(0,40);
   $('pairs').innerHTML=rows.map(p=>{
-    if(p.kalshi_ticker){
-      return `<tr>
-        <td>${esc(p.slug)} ↔ ${esc(p.kalshi_ticker)}</td><td>${esc(p.status||'matched')}</td>
-        <td colspan="4">${esc((p.question||'').slice(0,64))}</td>
-        <td colspan="4">score ${esc(num(p.match_score))} · ${esc(p.source||'')}</td>
-        <td>—</td><td>—</td><td>—</td><td>—</td>
-      </tr>`;
-    }
     const age=p.unpaired_age_s==null?'—':Number(p.unpaired_age_s).toFixed(0)+'s';
     return `<tr>
       <td>${esc(p.slug)}</td><td>${esc(p.status)}</td>
@@ -140,19 +191,25 @@ function renderPairs(pairs){
       <td>${esc(p.second_outcome)}</td><td>${esc(num(p.second_shares))}</td><td>${esc(num(p.second_avg))}</td><td>${esc(num(p.second_fee))}</td>
       <td>${money(p.expected_net)}</td><td>${money(p.locked_profit)}</td><td>${money(p.realized_net)}</td><td>${esc(age)}</td>
     </tr>`;
-  }).join('')||'<tr><td colspan="14">No pairs yet</td></tr>';
+  }).join('')||'<tr><td colspan="14">No pair-arb positions yet</td></tr>';
 }
 
-function renderPerf(stats){
-  const rows=[];
-  for(const [name,label] of [['arbitrage','Arbitrage'],['cross_venue','Cross-venue'],['combined','Combined']]){
-    const x=stats[name]; if(!x) continue;
-    rows.push(`<tr><td>${label}</td><td>${esc(x.trades??0)}</td><td>${esc(x.open??0)}</td><td>${esc(x.settled??0)}</td><td>${esc(pct(x.win_rate))}</td><td>${money(x.pnl)}</td><td>${esc(pct(x.roi))}</td></tr>`);
-  }
-  if(!rows.length){
-    const x=stats.arbitrage||stats.combined||{};
-    rows.push(`<tr><td>Arbitrage</td><td>${esc(x.trades??0)}</td><td>${esc(x.open??0)}</td><td>${esc(x.settled??0)}</td><td>${esc(pct(x.win_rate))}</td><td>${money(x.pnl)}</td><td>${esc(pct(x.roi))}</td></tr>`);
-  }
+function renderPerf(stats, strategy){
+  const wanted=strategy==='cross_venue'
+    ?[['cross_venue','Cross-venue (Poly↔Kalshi)']]
+    :strategy==='combined'
+    ?[['arbitrage','Polymarket arb'],['cross_venue','Cross-venue (Poly↔Kalshi)'],['combined','Combined']]
+    :[['arbitrage','Polymarket arb']];
+  const rows=wanted.map(([name,label])=>{
+    const x=stats[name]||{};
+    return `<tr>
+      <td>${label}</td>
+      <td>${esc(x.trades??0)}</td><td>${esc(x.open??0)}</td><td>${esc(x.settled??0)}</td>
+      <td>${esc(pct(x.win_rate))}</td><td>${money(x.pnl)}</td><td>${esc(pct(x.roi))}</td>
+      <td>${esc(x.candidates??'—')}</td><td>${esc(x.eligible??'—')}</td>
+      <td>${spreadCell(x.best_spread_pct)}</td>
+    </tr>`;
+  });
   $('performance').innerHTML=rows.join('');
 }
 
@@ -165,20 +222,21 @@ async function status(){
     $('clock').textContent=new Date().toLocaleString();
     if(document.activeElement!==$('paperBudget'))$('paperBudget').value=s.paper_budget??1000;
     if(document.activeElement!==$('strategy')&&s.strategy)$('strategy').value=s.strategy;
+    const strategyNames={arbitrage:'Polymarket arb',cross_venue:'Poly↔Kalshi',combined:'Combined'};
+    $('strategyLabel').textContent=strategyNames[s.strategy]||s.strategy||'—';
     $('mode').innerHTML=`<span class="${s.current_mode==='live'?'bad':'ok'}">${esc(s.current_mode||'stopped')}</span>${s.transition?' → '+esc(s.desired_mode):''}`;
     $('worker').innerHTML=s.worker_running?`<span class="ok">running</span> · ${s.worker_pid}`:'<span class="bad">stopped</span>';
-    const total=stats.combined||stats.arbitrage||stats.cross_venue||{};
+    const total=stats.combined||(s.strategy==='cross_venue'?stats.cross_venue:null)||stats.arbitrage||stats.cross_venue||{};
     $('pnl').innerHTML=money(total.pnl);
     const capital=portfolio.equity??portfolio.capital;
     $('capital').textContent=capital!=null?`$${Number(capital).toFixed(2)}`:'—';
     $('locked').innerHTML=money(br.locked_pair_profit);
-    $('expected').innerHTML=money(br.expected_profit);
-    $('unpairedRisk').innerHTML=money(br.unpaired_directional_risk);
     $('live').disabled=!s.live_enabled||s.current_mode==='live';
     $('paper').disabled=s.desired_mode==='paper'&&s.worker_running;
     fillSettings(s.arb_config);
+    renderCrossCandidates(s);
     renderPairs(s.pairs);
-    renderPerf(stats);
+    renderPerf(stats, s.strategy);
     const decisions=(s.recent_decisions||[]).slice(-20).reverse();
     $('decisions').textContent=decisions.length?decisions.map(d=>JSON.stringify(d)).join('\n'):'—';
     const names=(s.files||[]).map(f=>f.name);
@@ -196,7 +254,7 @@ async function status(){
         ?`Live cross: Poly FOK + Kalshi IOC on complementary legs; unwind on hedge miss. Capital is wallet + Kalshi balance.`
         :s.live_execution==='clob+cross'
         ?`Live combined: Poly pair-arb CLOB + cross-venue Poly↔Kalshi. Non-atomic fills can leave unpaired inventory.`
-        :`Live CLOB arb: FOK when ask_sum is cheap; resting maker limits (sum≤max_pair_cost) when asks are up to max_maker_ask_sum. Merge on pair; unwind on hedge miss. Capital is wallet collateral.`;
+        :`Live CLOB arb (safe): FOK taker only when ask_sum locks under max_pair_cost. No resting maker limits. Merge on pair; unwind on hedge miss. Capital is wallet collateral.`;
     else $('message').textContent=`Live unlocked. Non-atomic fills can leave unpaired inventory.`;
     if(selected)await loadLog();
   }catch(e){$('clock').textContent='Dashboard error';$('message').textContent=e.message}

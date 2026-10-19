@@ -52,7 +52,8 @@ class DashboardTests(TestCase):
         self.assertIn("window.confirm('Switch to LIVE?", html)
         self.assertIn("confirmation='LIVE'", html)
         self.assertIn("Locked pair profit", html)
-        self.assertIn("Unpaired risk", html)
+        self.assertIn("Cross candidates", html)
+        self.assertIn("Best cross spread", html)
 
     def test_mode_switch_requires_live_confirmation_and_kill_switch(self):
         supervisor = dashboard_server.Supervisor.__new__(dashboard_server.Supervisor)
@@ -286,6 +287,37 @@ class DashboardTests(TestCase):
         html=(Path(dashboard_server.__file__).with_name("dashboard.html")).read_text()
         self.assertIn("portfolio.equity??portfolio.capital",html)
         self.assertIn("live_execution==='clob'",html)
+        self.assertIn("crossCandidatesTable",html)
+        self.assertIn("Best spread",html)
+        self.assertIn("FOK taker only",html)
+
+    def test_cross_venue_candidates_surface_in_status(self):
+        (self.root/"replica-paper-cross-portfolio.json").write_text(json.dumps({
+            "strategy":"cross_venue",
+            "capital":1000,"equity":1000,
+            "candidate_count":3,"eligible_count":1,"best_spread_pct":4.2,
+            "candidates":[{
+                "slug":"fed-cut","kalshi_ticker":"KXFED","direction":"poly_yes_kalshi_no",
+                "poly_ask":0.4,"kalshi_ask":0.52,"cost":0.93,"edge":0.07,
+                "spread_pct":7.0,"match_score":1.0,"eligible":True,"status":"eligible",
+            }],
+            "strategy_stats":{"cross_venue":{
+                "trades":2,"open":0,"settled":2,"pnl":1.5,"roi":0.0015,
+                "candidates":3,"eligible":1,"best_spread_pct":4.2,
+            }},
+            "pairs":[],"pnl_breakdown":{},"recent_decisions":[],
+        }))
+        supervisor=dashboard_server.Supervisor.__new__(dashboard_server.Supervisor)
+        supervisor.desired_mode="paper";supervisor.current_mode="paper"
+        supervisor.process=None;supervisor.transition=False;supervisor.last_exit=None
+        supervisor.paper_budget=1000;supervisor.strategy="cross_venue"
+        supervisor.live_sizing="minimum";supervisor.live_state_path=None
+        supervisor.lock=threading.RLock()
+        result=supervisor.status()
+        self.assertEqual(result["candidate_count"],3)
+        self.assertEqual(result["best_spread_pct"],4.2)
+        self.assertEqual(result["candidates"][0]["spread_pct"],7.0)
+        self.assertEqual(result["strategy_stats"]["cross_venue"]["candidates"],3)
 
     def test_completed_legacy_state_does_not_block_unique_live_session(self):
         legacy = self.root / "replica-live-state.json"

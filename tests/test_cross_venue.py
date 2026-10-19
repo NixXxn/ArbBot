@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from arbitrage.discovery import ArbMarket
@@ -60,6 +62,12 @@ def test_cross_opportunity_picks_cheaper_direction(monkeypatch):
     assert opp.direction == "poly_yes_kalshi_no"
     assert opp.cost < 0.95
     assert opp.edge >= 0.05
+    assert len(engine.last_candidates) >= 1
+    top = max(engine.last_candidates, key=lambda r: float(r.get("spread_pct") or -999))
+    assert top["spread_pct"] == pytest.approx(opp.edge * 100.0, abs=0.05)
+    summary = engine.candidate_summary()
+    assert summary["candidate_count"] == len(engine.last_candidates)
+    assert summary["best_spread_pct"] is not None
 
 
 def test_load_cross_config_yaml(tmp_path):

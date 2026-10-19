@@ -22,7 +22,7 @@ arbitrage:
   min_ask: 0.01
   max_ask: 0.99
   min_ask_size: 3.0
-  live_maker_enabled: true
+  live_maker_enabled: false
   live_limit_timeout_seconds: 25
   hedge_depth_multiple: 1.0
   position_usd: 45.0

@@ -187,6 +187,12 @@ def main(argv: list[str] | None = None) -> int:
 
             settled = [t for t in trades if t.get("status") == "settled"]
             wins = [t for t in settled if float(t.get("net_pnl") or 0) > 0]
+            summary = engine.candidate_summary()
+            candidates = sorted(
+                engine.last_candidates,
+                key=lambda r: float(r.get("spread_pct") if r.get("spread_pct") is not None else -999),
+                reverse=True,
+            )[:60]
             stats = {
                 "trades": len(trades),
                 "settled": len(settled),
@@ -194,6 +200,10 @@ def main(argv: list[str] | None = None) -> int:
                 "wins": len(wins),
                 "win_rate": (len(wins) / len(settled)) if settled else None,
                 "pnl": realized,
+                "roi": (realized / capital) if capital else None,
+                "candidates": summary["candidate_count"],
+                "eligible": summary["eligible_count"],
+                "best_spread_pct": summary["best_spread_pct"],
             }
             portfolio = {
                 "updated_at_ms": int(time.time() * 1000),
@@ -209,17 +219,28 @@ def main(argv: list[str] | None = None) -> int:
                 "realized_pnl": realized,
                 "trades": trades[-500:],
                 "strategy_stats": {"cross_venue": stats, "combined": stats},
+                "candidate_count": summary["candidate_count"],
+                "eligible_count": summary["eligible_count"],
+                "best_spread_pct": summary["best_spread_pct"],
+                "candidates": candidates,
                 "pairs": [
                     {
-                        "pair_id": m.poly.slug + "::" + m.kalshi.ticker,
-                        "slug": m.poly.slug,
-                        "kalshi_ticker": m.kalshi.ticker,
-                        "status": "matched",
-                        "match_score": m.score,
-                        "source": m.source,
-                        "question": m.poly.question,
+                        "pair_id": c.get("slug", "") + "::" + c.get("kalshi_ticker", ""),
+                        "slug": c.get("slug"),
+                        "kalshi_ticker": c.get("kalshi_ticker"),
+                        "status": "eligible" if c.get("eligible") else (c.get("reject") or "quoted"),
+                        "direction": c.get("direction"),
+                        "poly_ask": c.get("poly_ask"),
+                        "kalshi_ask": c.get("kalshi_ask"),
+                        "cost": c.get("cost"),
+                        "edge": c.get("edge"),
+                        "spread_pct": c.get("spread_pct"),
+                        "match_score": c.get("match_score"),
+                        "source": c.get("source"),
+                        "question": c.get("question"),
+                        "shares": c.get("shares"),
                     }
-                    for m in engine.last_matches[:40]
+                    for c in candidates[:40]
                 ],
                 "pnl_breakdown": {
                     "locked_pair_profit": 0.0,
@@ -253,6 +274,9 @@ def main(argv: list[str] | None = None) -> int:
                 "live": True,
                 "capital": portfolio.get("capital"),
                 "matches": len(engine.last_matches),
+                "candidates": summary["candidate_count"],
+                "eligible": summary["eligible_count"],
+                "best_spread_pct": summary["best_spread_pct"],
                 "at_ms": int(time.time() * 1000),
             })
             time.sleep(max(2.0, cfg.poll_interval_seconds))

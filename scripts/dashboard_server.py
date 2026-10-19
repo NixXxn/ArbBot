@@ -603,7 +603,17 @@ class Supervisor:
                 result["cross_config"] = cross.get("cross_config") or {}
                 stats = dict(result.get("strategy_stats") or {})
                 stats.update(cross.get("strategy_stats") or {})
+                # Always expose a cross_venue performance row once the feed is active.
+                stats.setdefault("cross_venue", {
+                    "trades": 0, "open": 0, "settled": 0, "win_rate": None,
+                    "pnl": 0.0, "roi": None, "candidates": 0, "eligible": 0,
+                    "best_spread_pct": None,
+                })
                 result["strategy_stats"] = stats
+                result["candidates"] = cross.get("candidates") or []
+                result["candidate_count"] = cross.get("candidate_count")
+                result["eligible_count"] = cross.get("eligible_count")
+                result["best_spread_pct"] = cross.get("best_spread_pct")
                 if self.strategy == "cross_venue":
                     result["portfolio"] = {key: cross.get(key) for key in
                                            ("budget", "equity", "available", "open_exposure",
@@ -654,15 +664,56 @@ class Supervisor:
                     or cross_live.get("kalshi_authenticated")
                     or durable.get("kalshi_authenticated")
                 )
-            result["strategy_stats"] = (
+                cross_src = cross_live or durable
+                result["candidates"] = (
+                    cross_src.get("candidates")
+                    or result.get("candidates")
+                    or []
+                )
+                result["candidate_count"] = (
+                    cross_src.get("candidate_count")
+                    if cross_src.get("candidate_count") is not None
+                    else result.get("candidate_count")
+                )
+                result["eligible_count"] = (
+                    cross_src.get("eligible_count")
+                    if cross_src.get("eligible_count") is not None
+                    else result.get("eligible_count")
+                )
+                result["best_spread_pct"] = (
+                    cross_src.get("best_spread_pct")
+                    if cross_src.get("best_spread_pct") is not None
+                    else result.get("best_spread_pct")
+                )
+                result["cross_config"] = cross_src.get("cross_config") or result.get("cross_config") or {}
+            live_stats = (
                 (live_state or {}).get("strategy_stats")
                 or durable.get("strategy_stats")
-                or result.get("strategy_stats")
                 or {}
             )
+            if isinstance(live_stats, dict) and "trades" in live_stats and "cross_venue" not in live_stats:
+                # Flattened stats from a single-strategy live worker.
+                key = "cross_venue" if self.strategy == "cross_venue" else "arbitrage"
+                live_stats = {key: live_stats, **({"combined": live_stats} if self.strategy == "combined" else {})}
+            merged_stats = dict(result.get("strategy_stats") or {})
+            if isinstance(live_stats, dict):
+                for name, row in live_stats.items():
+                    if isinstance(row, dict):
+                        merged_stats[name] = row
+            if self.strategy in ("cross_venue", "combined"):
+                cross_stats = (cross_live.get("strategy_stats") or {}).get("cross_venue")
+                if isinstance(cross_stats, dict):
+                    merged_stats["cross_venue"] = cross_stats
+                merged_stats.setdefault("cross_venue", {
+                    "trades": 0, "open": 0, "settled": 0, "win_rate": None,
+                    "pnl": 0.0, "roi": None, "candidates": 0, "eligible": 0,
+                    "best_spread_pct": None,
+                })
+            result["strategy_stats"] = merged_stats
             result["pairs"] = (
                 (live_state or {}).get("pairs")
                 or durable.get("pairs")
+                or (cross_live.get("pairs") if self.strategy in ("cross_venue", "combined") else None)
                 or result.get("pairs")
                 or []
             )

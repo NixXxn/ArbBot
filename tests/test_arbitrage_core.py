@@ -45,6 +45,7 @@ def test_load_config_defaults():
     assert loaded.max_maker_ask_sum == 1.04
     assert loaded.paper_taker_cap == 0.995
     assert loaded.paper_mode is True
+    assert loaded.live_maker_enabled is False
     assert loaded.min_edge == 0.025
     assert loaded.safety_margin == 0.005
     assert loaded.hedge_timeout_seconds == 120

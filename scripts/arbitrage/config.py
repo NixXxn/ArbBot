@@ -58,7 +58,8 @@ class ArbConfig:
     min_ask: float = 0.01
     max_ask: float = 0.99
     min_ask_size: float = 3.0
-    live_maker_enabled: bool = True
+    # Safer live default: FOK taker only. Resting GTC makers are opt-in.
+    live_maker_enabled: bool = False
     live_limit_timeout_seconds: float = 25.0
     # 1.0 = counterleg must cover target size (papertrader-like); >1 is stricter.
     hedge_depth_multiple: float = 1.0
