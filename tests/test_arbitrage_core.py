@@ -189,11 +189,38 @@ def test_paper_fill_at_limit_buys_without_live_ask(tmp_path, cfg):
     assert abs(pair.second.avg_price - 0.47) < 1e-9
 
 
-def test_live_plan_rejects_maker_path(tmp_path, cfg):
+def test_live_plan_uses_resting_maker_window(tmp_path, cfg):
     cfg.paper_mode = False
     cfg.paper_fak = False
+    cfg.live_maker_enabled = True
     cfg.max_pair_cost = 0.94
+    cfg.max_maker_ask_sum = 1.04
     cfg.min_edge = 0.025
+    engine = ArbEngine(cfg, PairStore(tmp_path / "pairs.json"), discover_fn=lambda c: [])
+    m = _market()
+    quote = PairQuote(
+        market=m,
+        book_a=LegBook(bid=0.50, ask=0.52, bid_size=40, ask_size=40, spread=0.02, mid=0.51, fetched_ms=0),
+        book_b=LegBook(bid=0.49, ask=0.51, bid_size=40, ask_size=40, spread=0.02, mid=0.50, fetched_ms=0),
+        pair_ask=1.03,
+        pair_bid=0.99,
+        executable_shares=40,
+        age_ms=0,
+    )
+    choice = choose_leg_order(quote)
+    plan = engine._plan_entry(quote, choice, pair_budget=45.0)
+    assert plan is not None
+    assert plan.get("reject") is None
+    assert plan["mode"] == "maker_live"
+    assert plan["resting_limit"] is True
+    assert plan["paper_fill_at_limit"] is False
+    assert plan["limit_first"] + plan["limit_second"] <= cfg.max_pair_cost + 1e-9
+
+
+def test_live_plan_rejects_when_maker_disabled(tmp_path, cfg):
+    cfg.paper_mode = False
+    cfg.live_maker_enabled = False
+    cfg.max_pair_cost = 0.94
     engine = ArbEngine(cfg, PairStore(tmp_path / "pairs.json"), discover_fn=lambda c: [])
     m = _market()
     quote = PairQuote(
@@ -227,8 +254,8 @@ class ScriptedClient:
         self.fills = list(fills)
         self.calls = []
 
-    def buy(self, token, shares, limit_price, *, fill_at_limit: bool = False):
-        self.calls.append(("buy", token, shares, limit_price, fill_at_limit))
+    def buy(self, token, shares, limit_price, *, fill_at_limit: bool = False, resting: bool = False):
+        self.calls.append(("buy", token, shares, limit_price, fill_at_limit, resting))
         return self.fills.pop(0)
 
     def sell(self, token, shares, limit_price):

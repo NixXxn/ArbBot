@@ -54,9 +54,12 @@ class ArbConfig:
     slippage_buffer: float = 0.002
     min_liquidity: float = 400.0
     min_volume_24h: float = 150.0
-    min_ask: float = 0.02
-    max_ask: float = 0.95
+    # Wide per-leg band: binary arb cares about ask_sum, not each leg alone.
+    min_ask: float = 0.01
+    max_ask: float = 0.99
     min_ask_size: float = 3.0
+    live_maker_enabled: bool = True
+    live_limit_timeout_seconds: float = 25.0
     # 1.0 = counterleg must cover target size (papertrader-like); >1 is stricter.
     hedge_depth_multiple: float = 1.0
     position_usd: float = 45.0

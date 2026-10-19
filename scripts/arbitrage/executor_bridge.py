@@ -29,7 +29,13 @@ class FillResult:
 
 class BookClient(Protocol):
     def buy(
-        self, token: str, shares: float, limit_price: float, *, fill_at_limit: bool = False
+        self,
+        token: str,
+        shares: float,
+        limit_price: float,
+        *,
+        fill_at_limit: bool = False,
+        resting: bool = False,
     ) -> FillResult: ...
     def sell(self, token: str, shares: float, limit_price: float) -> FillResult: ...
 
@@ -43,11 +49,17 @@ class PaperBookClient:
         self._n = 0
 
     def buy(
-        self, token: str, shares: float, limit_price: float, *, fill_at_limit: bool = False
+        self,
+        token: str,
+        shares: float,
+        limit_price: float,
+        *,
+        fill_at_limit: bool = False,
+        resting: bool = False,
     ) -> FillResult:
         self._n += 1
         # Papertrader maker path: fill at posted limit with no ask walk.
-        if fill_at_limit or (
+        if fill_at_limit or resting or (
             getattr(self.cfg, "paper_mode", True)
             and getattr(self.cfg, "paper_fak", True)
             and bool(getattr(self.cfg, "force_fill_at_limit", False))
@@ -131,15 +143,26 @@ class LiveBookClient:
         return self._loop.run_until_complete(coro)
 
     def buy(
-        self, token: str, shares: float, limit_price: float, *, fill_at_limit: bool = False
+        self,
+        token: str,
+        shares: float,
+        limit_price: float,
+        *,
+        fill_at_limit: bool = False,
+        resting: bool = False,
     ) -> FillResult:
-        if fill_at_limit:
+        if fill_at_limit and not resting:
             return FillResult(False, reason="live_rejects_synthetic_fill")
         if self._client is None:
             return FillResult(False, reason="not_connected")
-        from live_executor import ExecutionStopped, OrderNotSubmitted, buy_shares, encode_response
+        from live_executor import ExecutionStopped, OrderNotSubmitted, encode_response
 
         from .fees import leg_fee as fee_fn
+
+        if resting:
+            return self._buy_resting(token, shares, limit_price, fee_fn)
+
+        from live_executor import buy_shares
 
         try:
             response, got, spent = self._run(
@@ -168,6 +191,65 @@ class LiveBookClient:
             fee=fee,
             notional=notional,
             order_id=encoded.get("order_id"),
+        )
+
+    def _buy_resting(self, token: str, shares: float, limit_price: float, fee_fn) -> FillResult:
+        """Post GTC limit, wait briefly, cancel remainder — live maker window."""
+        from live_executor import (
+            ExecutionStopped,
+            OrderNotSubmitted,
+            place_limit_buy,
+            token_balance,
+            wait_limit_fill,
+        )
+
+        timeout = float(getattr(self.cfg, "live_limit_timeout_seconds", 25.0) or 25.0)
+        try:
+            baseline = self._run(token_balance(self._client, token))
+
+            async def _place_and_wait():
+                resp = await place_limit_buy(
+                    self._client, self.env_path, token, limit_price, shares
+                )
+                if not resp.ok:
+                    return resp, Decimal(0)
+                order_id = resp.order_id
+                filled = await wait_limit_fill(
+                    self._client, order_id, token, baseline, shares, timeout_s=timeout
+                )
+                try:
+                    await self._client.cancel_order(order_id=order_id)
+                except Exception:
+                    pass
+                return resp, filled
+
+            response, got = self._run(_place_and_wait())
+        except OrderNotSubmitted as exc:
+            return FillResult(False, reason=str(exc) or "order_not_submitted")
+        except ExecutionStopped as exc:
+            return FillResult(False, reason=str(exc) or "execution_stopped")
+        except Exception as exc:
+            log.exception("live resting buy failed")
+            return FillResult(False, reason=f"live_limit_error:{type(exc).__name__}")
+
+        if not getattr(response, "ok", False) or got <= 0:
+            code = getattr(response, "code", None) or "limit_no_fill"
+            return FillResult(
+                False,
+                reason=str(code),
+                order_id=getattr(response, "order_id", None),
+            )
+        shares_f = float(got)
+        avg = float(limit_price)
+        notional = shares_f * avg
+        fee = fee_fn(notional, avg, taker=False, cfg=self.cfg)
+        return FillResult(
+            True,
+            shares=shares_f,
+            avg_price=avg,
+            fee=fee,
+            notional=notional,
+            order_id=getattr(response, "order_id", None),
         )
 
     def sell(self, token: str, shares: float, limit_price: float) -> FillResult:
@@ -260,11 +342,16 @@ class IntentExecutor:
         pair = intent.pair
         meta = intent.meta or {}
         fill_at_limit = bool(meta.get("paper_fill_at_limit"))
+        resting = bool(meta.get("resting_limit"))
         live = not bool(getattr(self.engine.cfg, "paper_mode", True))
 
         if intent.kind == "enter_first" and pair is not None:
             fill = self.client.buy(
-                intent.token, intent.shares, intent.limit_price, fill_at_limit=fill_at_limit
+                intent.token,
+                intent.shares,
+                intent.limit_price,
+                fill_at_limit=fill_at_limit,
+                resting=resting,
             )
             if not fill.ok or fill.shares <= 0:
                 pair.status = "closed"
@@ -273,8 +360,8 @@ class IntentExecutor:
                 self.engine.store.log_event(pair, "first_miss", reason=pair.escalation_reason)
                 return {"ok": False, "kind": intent.kind, "reason": fill.reason}
             self.engine.on_first_fill(pair, fill.shares, fill.avg_price, fill.fee, fill.order_id)
-            # Keep planned second limit when paper fill-at-limit (maker path).
-            if fill_at_limit and meta.get("second_limit") is not None:
+            # Keep planned second limit when maker path (paper synthetic or live resting).
+            if (fill_at_limit or resting) and meta.get("second_limit") is not None:
                 pair.max_second_price = float(meta["second_limit"])
                 self.engine.store.upsert(pair)
             result = {"ok": True, "kind": intent.kind, "fill": fill.__dict__, "pair_id": pair.pair_id}
@@ -284,7 +371,11 @@ class IntentExecutor:
                 max_px = pair.max_second_price
                 if need > 0 and max_px is not None and max_px > 0:
                     hedge = self.client.buy(
-                        pair.second.token, need, max_px, fill_at_limit=fill_at_limit
+                        pair.second.token,
+                        need,
+                        max_px,
+                        fill_at_limit=fill_at_limit,
+                        resting=resting,
                     )
                     result["immediate_hedge"] = hedge.__dict__
                     if hedge.ok and hedge.shares > 0:
@@ -314,7 +405,11 @@ class IntentExecutor:
 
         if intent.kind == "hedge_second" and pair is not None:
             fill = self.client.buy(
-                intent.token, intent.shares, intent.limit_price, fill_at_limit=fill_at_limit
+                intent.token,
+                intent.shares,
+                intent.limit_price,
+                fill_at_limit=fill_at_limit,
+                resting=resting,
             )
             if not fill.ok or fill.shares <= 0:
                 self.engine.store.log_event(pair, "hedge_miss", reason=fill.reason)

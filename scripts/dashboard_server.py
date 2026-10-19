@@ -428,13 +428,14 @@ class Supervisor:
             "min_pair_profit_pct", "pair_bid_sum_exit", "scan_limit",
             "min_ask", "max_ask", "min_ask_size", "hedge_depth_multiple",
             "max_concurrent_unpaired", "immediate_hedge",
+            "live_maker_enabled", "live_limit_timeout_seconds",
         }
         overlay = {}
         for key in allowed:
             if key not in payload:
                 continue
             value = payload[key]
-            if isinstance(value, bool) or key in ("immediate_hedge",):
+            if isinstance(value, bool) or key in ("immediate_hedge", "live_maker_enabled"):
                 overlay[key] = bool(value)
             else:
                 try:

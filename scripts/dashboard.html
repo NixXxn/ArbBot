@@ -164,7 +164,7 @@ async function status(){
     if(actionError)$('message').textContent=actionError;
     else if(!s.live_enabled)$('message').textContent=`LIVE_KILL=1: live locked. Locked profits are fee-aware matched pairs only; expected is pre-hedge; unpaired is directional risk.`;
     else if(s.live_execution==='clob'&&(s.current_mode==='live'||s.desired_mode==='live'))
-      $('message').textContent=`Live CLOB arb: FOK sequential legs + merge. Capital is wallet collateral. Unpaired inventory is unwound on hedge miss — still real directional risk between legs.`;
+      $('message').textContent=`Live CLOB arb: FOK when ask_sum is cheap; resting maker limits (sum≤max_pair_cost) when asks are up to max_maker_ask_sum. Merge on pair; unwind on hedge miss. Capital is wallet collateral.`;
     else $('message').textContent=`Live unlocked. Non-atomic fills can leave unpaired inventory.`;
     if(selected)await loadLog();
   }catch(e){$('clock').textContent='Dashboard error';$('message').textContent=e.message}

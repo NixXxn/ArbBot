@@ -86,8 +86,10 @@ class ArbEngine:
                 "paper_fill_at_limit": bool(paper and cfg.paper_fak),
             }
 
-        # --- Paper maker path (papertrader): asks up to max_maker_ask_sum, fill at limits ---
-        if not (paper and cfg.paper_fak):
+        # --- Maker path: asks up to max_maker_ask_sum, limits sum to max_pair_cost ---
+        # Paper: synthetic fill-at-limit. Live: resting GTC limits (same economics).
+        live_maker = (not paper) and bool(getattr(cfg, "live_maker_enabled", True))
+        if not ((paper and cfg.paper_fak) or live_maker):
             return {"reject": taker.reason or "not_taker"}
         maker_cap = float(getattr(cfg, "max_maker_ask_sum", 1.04) or 1.04)
         if pair_ask > maker_cap + 1e-9:
@@ -121,12 +123,13 @@ class ArbEngine:
         if shares * limit_first < cfg.min_position_usd:
             return {"reject": "size_too_small"}
         return {
-            "mode": "maker_paper",
+            "mode": "maker_paper" if paper else "maker_live",
             "shares": shares,
             "limit_first": limit_first,
             "limit_second": limit_second,
             "expected_net": locked_edge * shares,
-            "paper_fill_at_limit": True,
+            "paper_fill_at_limit": bool(paper),
+            "resting_limit": bool(live_maker),
         }
 
     def scan_entries(self, *, cash: float) -> list[Intent]:
@@ -178,6 +181,7 @@ class ArbEngine:
             limit_second = float(planned["limit_second"])
             expected_net = float(planned["expected_net"])
             fill_at_limit = bool(planned["paper_fill_at_limit"])
+            resting_limit = bool(planned.get("resting_limit"))
             mode = str(planned["mode"])
 
             pair = self.store.new_pair(
@@ -201,6 +205,7 @@ class ArbEngine:
                 shares=shares,
                 expected_net=expected_net,
                 paper_fill_at_limit=fill_at_limit,
+                resting_limit=resting_limit,
             )
             self._log(
                 "enter",
@@ -210,6 +215,7 @@ class ArbEngine:
                 pair_ask=quote.pair_ask,
                 shares=round(shares, 4),
                 fill_at_limit=fill_at_limit,
+                resting_limit=resting_limit,
             )
             intents.append(
                 Intent(
@@ -228,6 +234,7 @@ class ArbEngine:
                         "max_second": limit_second,
                         "second_limit": limit_second,
                         "paper_fill_at_limit": fill_at_limit,
+                        "resting_limit": resting_limit,
                         "mode": mode,
                     },
                 )

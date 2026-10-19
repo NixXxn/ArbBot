@@ -19,9 +19,11 @@ arbitrage:
   slippage_buffer: 0.002
   min_liquidity: 400
   min_volume_24h: 150
-  min_ask: 0.02
-  max_ask: 0.95
+  min_ask: 0.01
+  max_ask: 0.99
   min_ask_size: 3.0
+  live_maker_enabled: true
+  live_limit_timeout_seconds: 25
   hedge_depth_multiple: 1.0
   position_usd: 45.0
   max_position_usd: 110.0
