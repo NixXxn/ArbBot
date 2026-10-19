@@ -28,6 +28,26 @@ class ExecutionGuards(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(c.create_market_order.call_args.kwargs["order_type"],"FOK")
         c.post_order.assert_awaited_once()
 
+    async def test_buy_shares_fok_uses_ask_notional(self):
+        c=self.client()
+        c.post_order.return_value=N(ok=True,order_id="o1",code=None,making_amount="2000000",
+                                    taking_amount="10000000",trade_ids=["t"],transactions_hashes=["h"])
+        with patch.object(ex,"enabled_env"),\
+             patch.object(ex,"token_balance",new=AsyncMock(side_effect=[Decimal(0),Decimal(10)])),\
+             patch.object(ex,"settle",new=AsyncMock(return_value=["h"])):
+            response,got,spent=await ex.buy_shares(c,"unused","token",10,Decimal("0.25"))
+        self.assertTrue(response.ok)
+        self.assertEqual(got,Decimal("10.00"))
+        self.assertEqual(c.create_market_order.call_args.kwargs["order_type"],"FOK")
+        self.assertEqual(c.create_market_order.call_args.kwargs["amount"],"2.00")
+        self.assertEqual(c.create_market_order.call_args.kwargs["max_price"],"0.25")
+
+    async def test_buy_shares_rejects_ask_above_limit(self):
+        c=self.client()
+        with patch.object(ex,"enabled_env"),self.assertRaises(ex.OrderNotSubmitted):
+            await ex.buy_shares(c,"unused","token",10,Decimal("0.15"))
+        c.post_order.assert_not_awaited()
+
     async def test_oversized_signature_never_posts(self):
         c=self.client();c.create_market_order.return_value=N(maker_amount=1600001)
         with patch.object(ex,"enabled_env"),self.assertRaises(ex.ExecutionStopped):

@@ -245,12 +245,12 @@ class DashboardTests(TestCase):
         self.assertEqual(result["portfolio"]["capital"],100)
         self.assertEqual(result["portfolio"]["equity"],100)
         self.assertEqual(result["portfolio"]["open_exposure"],6)
-        self.assertEqual(result["live_execution"],"paper_sim")
+        self.assertEqual(result["live_execution"],"clob")
 
-    def test_live_mode_shows_paper_arb_equity(self):
-        """Live still runs the paper arb worker; capital must come from that portfolio."""
-        (self.root/"replica-paper-portfolio.json").write_text(json.dumps({
-            "budget":1000,"equity":1000,"open_exposure":40,"max_exposure":300,
+    def test_live_mode_shows_wallet_portfolio(self):
+        """Live CLOB worker writes replica-portfolio-live; capital must surface."""
+        (self.root/"replica-portfolio-live.json").write_text(json.dumps({
+            "capital":250.5,"equity":250.5,"open_exposure":40,"max_exposure":75.15,
             "strategy_stats":{"arbitrage":{"trades":3,"pnl":12.5}},
             "pairs":[{"id":"p1"}],"pnl_breakdown":{"locked_pair_profit":1.2}}))
         supervisor=dashboard_server.Supervisor.__new__(dashboard_server.Supervisor)
@@ -260,10 +260,10 @@ class DashboardTests(TestCase):
         supervisor.live_sizing="minimum";supervisor.live_state_path=None
         supervisor.lock=threading.RLock()
         result=supervisor.status()
-        self.assertEqual(result["portfolio"]["equity"],1000)
+        self.assertEqual(result["portfolio"]["equity"],250.5)
         self.assertEqual(result["strategy_stats"]["arbitrage"]["trades"],3)
         self.assertEqual(result["pairs"][0]["id"],"p1")
-        self.assertEqual(result["live_execution"],"paper_sim")
+        self.assertEqual(result["live_execution"],"clob")
 
     def test_durable_live_statistics_are_visible_between_workers(self):
         (self.root/"replica-portfolio-live.json").write_text(json.dumps({
@@ -283,7 +283,7 @@ class DashboardTests(TestCase):
     def test_dashboard_capital_reads_equity_or_capital(self):
         html=(Path(dashboard_server.__file__).with_name("dashboard.html")).read_text()
         self.assertIn("portfolio.equity??portfolio.capital",html)
-        self.assertIn("live_execution==='paper_sim'",html)
+        self.assertIn("live_execution==='clob'",html)
 
     def test_completed_legacy_state_does_not_block_unique_live_session(self):
         legacy = self.root / "replica-live-state.json"
@@ -303,8 +303,8 @@ class DashboardTests(TestCase):
         self.assertNotEqual(supervisor.live_state_path, legacy)
         self.assertTrue(supervisor.live_state_path.name.startswith("replica-live-"))
         command = supervisor._command("live")
-        self.assertTrue(any("run_arb_paper.py" in str(part) for part in command))
-        self.assertIn("arbitrage", command)
+        self.assertTrue(any("run_arb_live.py" in str(part) for part in command))
+        self.assertTrue(any(str(supervisor.live_state_path) == str(part) for part in command))
 
     def test_proven_pre_submission_guard_does_not_block_live_restart(self):
         state=self.root/"replica-live-state.json"
@@ -337,9 +337,9 @@ class DashboardTests(TestCase):
         self.assertEqual(result["current_mode"], "live")
         self.assertEqual(result["recovery_states"], ["replica-live-old.json"])
         command = popen.call_args.args[0]
-        self.assertTrue(any("run_arb_paper.py" in str(part) for part in command))
-        # Recovery paths are still detected for operator visibility; live worker is paper arb gated.
-        self.assertIn("arbitrage", command)
+        self.assertTrue(any("run_arb_live.py" in str(part) for part in command))
+        # Recovery paths stay visible; live worker places real CLOB arb orders.
+        self.assertTrue(any(str(supervisor.live_state_path) == str(part) for part in command))
 
     def test_failed_live_worker_exposes_actionable_error(self):
         supervisor = dashboard_server.Supervisor.__new__(dashboard_server.Supervisor)

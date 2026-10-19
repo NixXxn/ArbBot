@@ -242,6 +242,52 @@ async def buy(client, env_path, token, budget, max_price, *, deadline_ms=None, s
     return await client.post_order(signed)
 
 
+async def buy_shares(client, env_path, token, shares, max_price):
+    """FOK buy for an exact share target (arb legs). One POST; no retries."""
+    enabled_env(env_path)
+    shares = Decimal(str(shares)).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+    max_price = Decimal(str(max_price))
+    if not shares.is_finite() or not max_price.is_finite() or shares <= 0 or not 0 < max_price < 1:
+        raise OrderNotSubmitted("Invalid share quantity or max price")
+    book = await client.get_order_book(token_id=token)
+    bid, ask = best(book)
+    if ask.price > max_price:
+        raise OrderNotSubmitted("ask_above_limit")
+    fill_shares = min(shares, ask.size).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+    if fill_shares < book.min_order_size:
+        raise OrderNotSubmitted("size_below_minimum")
+    amount = (fill_shares * ask.price).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+    max_spend = (fill_shares * max_price).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+    if amount < Decimal("0.01") or max_spend < amount:
+        raise OrderNotSubmitted("notional_too_small")
+    baseline = await token_balance(client, token)
+    signed = await client.create_market_order(
+        token_id=token, side="BUY", amount=str(amount),
+        max_spend=str(max_spend), max_price=str(max_price), order_type="FOK")
+    if Decimal(signed.maker_amount) / UNITS > max_spend:
+        raise OrderNotSubmitted("Signed order exceeded the notional limit")
+    enabled_env(env_path)
+    response = await client.post_order(signed)
+    if not response.ok:
+        return response, Decimal(0), Decimal(0)
+    await settle(client, response)
+    after = await token_balance(client, token)
+    got = max(Decimal(0), after - baseline).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+    if got <= 0 and response.taking_amount:
+        got = (Decimal(response.taking_amount) / UNITS).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+    spent = Decimal(0)
+    if response.making_amount:
+        spent = (Decimal(response.making_amount) / UNITS).quantize(Decimal("0.0001"), rounding=ROUND_DOWN)
+    if spent <= 0 and got > 0:
+        spent = (got * ask.price).quantize(Decimal("0.0001"), rounding=ROUND_DOWN)
+    return response, got, spent
+
+
+async def collateral_available(client):
+    balance = await client.get_balance_allowance(asset_type="COLLATERAL")
+    return Decimal(balance.balance) / UNITS
+
+
 async def sell_increment(client, token, baseline, attempts=3):
     """Sell only shares added above baseline; never resubmit an ambiguous POST."""
     results = []

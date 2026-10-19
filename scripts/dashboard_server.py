@@ -203,20 +203,17 @@ class Supervisor:
                 str(self.paper_budget),
                 str(STATS_RESET_FILE),
             ]
-        # Live path retained for recovery of prior states only; LIVE_KILL defaults to on.
-        # New directional strategies are removed — live arb uses the same paper runner
-        # until an explicit live arb executor is enabled by the operator.
+        # Live: real CLOB FOK arb via run_arb_live (LIVE_KILL must be 0).
+        env_path = os.environ.get("BOT_ENV_PATH", ".env")
+        state = getattr(self, "live_state_path", None) or (DATA_DIR / "replica-live-state.json")
         command = [
             sys.executable, "-u", str(scripts / "bounded_console.py"),
             str(DATA_DIR / "replica-console.log"),
-            sys.executable, "-u", str(scripts / "run_arb_paper.py"),
+            sys.executable, "-u", str(scripts / "run_arb_live.py"),
             str(DATA_DIR),
-            str(app_root / "leadlag"),
-            str(app_root),
+            str(state),
+            str(env_path),
             "31536000",
-            "arbitrage",
-            str(self.paper_budget),
-            str(STATS_RESET_FILE),
         ]
         return command
 
@@ -230,6 +227,11 @@ class Supervisor:
             self.recovery_state_paths = unresolved_live_states()
             stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
             self.live_state_path = DATA_DIR / f"replica-live-{stamp}-{time.time_ns()%1_000_000:06d}.json"
+            # Seed empty state so the worker path and dashboard agree before connect.
+            atomic_json(self.live_state_path, {
+                "mode": "live", "strategy": "arbitrage", "stage": "starting",
+                "live_execution": "clob", "started_at_ms": int(time.time() * 1000),
+            })
         STOP_FILE.unlink(missing_ok=True)
         self.process = subprocess.Popen(self._command(mode), start_new_session=True)
         self.worker_started_at = time.monotonic()
@@ -519,15 +521,14 @@ class Supervisor:
         if live_state:
             result["live_state"] = live_state
             result["live_state_file"] = live_state_path.name
-        # Live currently launches the same arb paper runner (no CLOB orders yet).
-        # Always surface that portfolio so Capital / pairs / PnL stay visible in live mode.
         paper_mode = result["current_mode"] == "paper" or result["desired_mode"] == "paper"
         live_mode = result["current_mode"] == "live" or result["desired_mode"] == "live"
-        result["live_execution"] = "paper_sim" if live_mode else None
+        result["live_execution"] = "clob" if live_mode else None
         health_by_asset, fills = {}, []
         labels = active_feeds(self.strategy)
         paper = read_json(DATA_DIR / "replica-paper-portfolio.json") or {}
-        if paper_mode or live_mode:
+        durable = read_json(DATA_DIR / "replica-portfolio-live.json") or {}
+        if paper_mode and not (live_mode and result["desired_mode"] == "live" and result["current_mode"] == "live"):
             health_by_asset.update(paper.get("engine_health", {}))
             for asset in labels:
                 journal = DATA_DIR / f"replica-paper-{asset}.jsonl"
@@ -554,7 +555,7 @@ class Supervisor:
             result["strategy_stats"] = paper.get("strategy_stats", {})
             result["portfolio"] = {key: paper.get(key) for key in
                                    ("budget", "equity", "available", "open_exposure",
-                                    "max_exposure", "exposure_rate")}
+                                    "max_exposure", "exposure_rate", "capital")}
             result["risk_controls"] = paper.get("risk_controls", {})
             result["pairs"] = paper.get("pairs", [])
             result["pnl_breakdown"] = paper.get("pnl_breakdown", {})
@@ -570,33 +571,75 @@ class Supervisor:
                     result["engine_health_by_asset"] = {"arbitrage": health}
                 if fill:
                     result["latest_paper_fill"] = fill
-        if live_mode and not paper_mode:
-            # Pure live view: overlay wallet/legacy capital when paper equity is missing.
-            durable = read_json(DATA_DIR / "replica-portfolio-live.json") or {}
+        if live_mode and result["desired_mode"] == "live":
+            # Prefer live worker snapshot (wallet capital); fall back to durable / paper.
             live_pf = ((live_state or {}).get("portfolio")
-                       or durable.get("portfolio") or {})
-            if not result.get("strategy_stats") and durable.get("strategy_stats"):
-                result["strategy_stats"] = durable.get("strategy_stats", {})
+                       or durable.get("portfolio")
+                       or {k: durable.get(k) for k in
+                           ("capital", "equity", "available", "open_exposure",
+                            "max_exposure", "exposure_rate")}
+                       or {})
+            # durable file may be the portfolio itself (run_arb_live writes full portfolio)
+            if not live_pf.get("equity") and not live_pf.get("capital"):
+                if durable.get("equity") is not None or durable.get("capital") is not None:
+                    live_pf = durable
+            result["strategy_stats"] = (
+                (live_state or {}).get("strategy_stats")
+                or durable.get("strategy_stats")
+                or result.get("strategy_stats")
+                or {}
+            )
+            result["pairs"] = (
+                (live_state or {}).get("pairs")
+                or durable.get("pairs")
+                or result.get("pairs")
+                or []
+            )
+            result["pnl_breakdown"] = (
+                (live_state or {}).get("pnl_breakdown")
+                or durable.get("pnl_breakdown")
+                or result.get("pnl_breakdown")
+                or {}
+            )
+            result["risk_controls"] = (
+                (live_state or {}).get("risk_controls")
+                or durable.get("risk_controls")
+                or result.get("risk_controls")
+                or {}
+            )
+            result["recent_decisions"] = (
+                durable.get("recent_decisions")
+                or (live_state or {}).get("recent_decisions")
+                or result.get("recent_decisions")
+                or []
+            )
+            baked = dict(durable.get("arb_config") or result.get("arb_config") or {})
+            overlay = read_json(DATA_DIR / "arb-settings.json") or {}
+            baked.update({k: v for k, v in overlay.items() if k != "updated_at_ms"})
+            result["arb_config"] = baked
             if (live_state or {}).get("engine_health"):
                 result["engine_health"] = live_state.get("engine_health")
-            if (live_state or {}).get("engine_health_by_asset"):
-                result["engine_health_by_asset"] = live_state.get("engine_health_by_asset")
-            if (live_state or {}).get("risk_controls") or durable.get("risk_controls"):
-                result["risk_controls"] = ((live_state or {}).get("risk_controls")
-                                           or durable.get("risk_controls", {}))
-            portfolio = dict(result.get("portfolio") or {})
-            if portfolio.get("equity") is None:
-                capital = live_pf.get("equity", live_pf.get("capital"))
-                if capital is not None:
-                    portfolio["equity"] = capital
-                    portfolio.setdefault("capital", live_pf.get("capital", capital))
-                    for key in ("available", "open_exposure", "max_exposure", "exposure_rate"):
-                        if portfolio.get(key) is None and live_pf.get(key) is not None:
-                            portfolio[key] = live_pf[key]
-            elif live_pf.get("capital") is not None:
-                portfolio.setdefault("capital", live_pf["capital"])
+            portfolio = {
+                key: live_pf.get(key)
+                for key in ("budget", "equity", "available", "open_exposure",
+                            "max_exposure", "exposure_rate", "capital")
+            }
+            if portfolio.get("equity") is None and portfolio.get("capital") is not None:
+                portfolio["equity"] = portfolio["capital"]
+            if portfolio.get("capital") is None and portfolio.get("equity") is not None:
+                portfolio["capital"] = portfolio["equity"]
+            # Last resort: paper equity so Capital never blanks during connect.
+            if portfolio.get("equity") is None and paper.get("equity") is not None:
+                portfolio["equity"] = paper["equity"]
+                portfolio.setdefault("capital", paper["equity"])
             result["portfolio"] = portfolio
-        # Always expose equity alias when only capital is present (legacy live snapshots).
+            live_journal = DATA_DIR / "replica-live-arbitrage.jsonl"
+            if live_journal.exists():
+                health, _ = recent_events(live_journal)
+                if health:
+                    result["engine_health_by_asset"] = {"arbitrage": health}
+                    result["engine_health"] = health
+        # Always expose equity alias when only capital is present.
         portfolio = dict(result.get("portfolio") or {})
         if portfolio.get("equity") is None and portfolio.get("capital") is not None:
             portfolio["equity"] = portfolio["capital"]

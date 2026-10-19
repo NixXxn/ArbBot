@@ -61,7 +61,9 @@ export DASHBOARD_TOKEN=change-me-16chars
 docker compose up --build
 ```
 
-Live trading stays gated (`LIVE_KILL=1`). Do not enable live until any prior
+Live trading stays gated (`LIVE_KILL=1`). Dashboard **Live** runs `run_arb_live.py`:
+real CLOB FOK sequential legs, immediate hedge, CTF merge when both fill, and
+unwind on hedge miss. Capital is wallet collateral. Do not unlock until any prior
 unresolved wallet positions are reconciled (see `data/PREFLIGHT_NOTE.txt`).
 
 ## PnL labels

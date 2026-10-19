@@ -189,6 +189,39 @@ def test_paper_fill_at_limit_buys_without_live_ask(tmp_path, cfg):
     assert abs(pair.second.avg_price - 0.47) < 1e-9
 
 
+def test_live_plan_rejects_maker_path(tmp_path, cfg):
+    cfg.paper_mode = False
+    cfg.paper_fak = False
+    cfg.max_pair_cost = 0.94
+    cfg.min_edge = 0.025
+    engine = ArbEngine(cfg, PairStore(tmp_path / "pairs.json"), discover_fn=lambda c: [])
+    m = _market()
+    quote = PairQuote(
+        market=m,
+        book_a=LegBook(bid=0.50, ask=0.52, bid_size=40, ask_size=40, spread=0.02, mid=0.51, fetched_ms=0),
+        book_b=LegBook(bid=0.49, ask=0.51, bid_size=40, ask_size=40, spread=0.02, mid=0.50, fetched_ms=0),
+        pair_ask=1.03,
+        pair_bid=0.99,
+        executable_shares=40,
+        age_ms=0,
+    )
+    choice = choose_leg_order(quote)
+    plan = engine._plan_entry(quote, choice, pair_budget=45.0)
+    assert plan is not None
+    assert plan.get("reject") in ("ask_sum_too_high", "not_taker", "pair_cost_above_cap", "net_below_min_edge")
+
+
+def test_live_client_rejects_synthetic_fill_at_limit(cfg):
+    from arbitrage.executor_bridge import LiveBookClient
+
+    cfg.paper_mode = False
+    client = LiveBookClient(cfg, ".env", client=object())
+    fill = client.buy("tok", 10, 0.47, fill_at_limit=True)
+    assert not fill.ok
+    assert fill.reason == "live_rejects_synthetic_fill"
+    client.close()
+
+
 class ScriptedClient:
     def __init__(self, fills: list[FillResult]):
         self.fills = list(fills)

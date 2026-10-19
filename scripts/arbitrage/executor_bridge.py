@@ -1,9 +1,11 @@
 """Paper (and optional live) execution bridge for dual-leg arb."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any, Protocol
 
 from .config import ArbConfig
@@ -105,6 +107,150 @@ class PaperBookClient:
         )
 
 
+class LiveBookClient:
+    """Real CLOB FOK buys/sells via live_executor. Never synthesizes fills."""
+
+    def __init__(self, cfg: ArbConfig, env_path: str, *, client=None, loop: asyncio.AbstractEventLoop | None = None):
+        self.cfg = cfg
+        self.env_path = env_path
+        self._client = client
+        self._loop = loop or asyncio.new_event_loop()
+        self._owns_loop = loop is None
+
+    def connect(self, *, redemption: bool = True):
+        from live_executor import connect
+
+        self._client = self._run(connect(self.env_path, redemption=redemption))
+        return self._client
+
+    def close(self) -> None:
+        if self._owns_loop and self._loop and not self._loop.is_closed():
+            self._loop.close()
+
+    def _run(self, coro):
+        return self._loop.run_until_complete(coro)
+
+    def buy(
+        self, token: str, shares: float, limit_price: float, *, fill_at_limit: bool = False
+    ) -> FillResult:
+        if fill_at_limit:
+            return FillResult(False, reason="live_rejects_synthetic_fill")
+        if self._client is None:
+            return FillResult(False, reason="not_connected")
+        from live_executor import ExecutionStopped, OrderNotSubmitted, buy_shares, encode_response
+
+        from .fees import leg_fee as fee_fn
+
+        try:
+            response, got, spent = self._run(
+                buy_shares(self._client, self.env_path, token, shares, limit_price)
+            )
+        except OrderNotSubmitted as exc:
+            return FillResult(False, reason=str(exc) or "order_not_submitted")
+        except ExecutionStopped as exc:
+            return FillResult(False, reason=str(exc) or "execution_stopped")
+        except Exception as exc:
+            log.exception("live buy failed")
+            return FillResult(False, reason=f"live_buy_error:{type(exc).__name__}")
+
+        if not response.ok or got <= 0:
+            code = getattr(response, "code", None) or "no_fill"
+            return FillResult(False, reason=str(code), order_id=getattr(response, "order_id", None))
+        avg = float(spent / got) if got > 0 and spent > 0 else float(limit_price)
+        shares_f = float(got)
+        notional = float(spent) if spent > 0 else shares_f * avg
+        fee = fee_fn(notional, avg, taker=True, cfg=self.cfg)
+        encoded = encode_response(response)
+        return FillResult(
+            True,
+            shares=shares_f,
+            avg_price=avg,
+            fee=fee,
+            notional=notional,
+            order_id=encoded.get("order_id"),
+        )
+
+    def sell(self, token: str, shares: float, limit_price: float) -> FillResult:
+        if self._client is None:
+            return FillResult(False, reason="not_connected")
+        from live_executor import ExecutionStopped, OrderNotSubmitted, encode_response, sell_position
+
+        from .fees import leg_fee as fee_fn
+
+        trigger = max(0.01, float(limit_price) if limit_price and limit_price > 0 else 0.01)
+        try:
+            response = self._run(
+                sell_position(self._client, self.env_path, token, shares, trigger)
+            )
+        except OrderNotSubmitted as exc:
+            return FillResult(False, reason=str(exc) or "order_not_submitted")
+        except ExecutionStopped as exc:
+            return FillResult(False, reason=str(exc) or "execution_stopped")
+        except Exception as exc:
+            log.exception("live sell failed")
+            return FillResult(False, reason=f"live_sell_error:{type(exc).__name__}")
+
+        if not response.ok:
+            return FillResult(False, reason=str(getattr(response, "code", "sell_miss")),
+                              order_id=getattr(response, "order_id", None))
+        from live_executor import UNITS
+
+        encoded = encode_response(response)
+        # SELL: maker_amount ≈ shares (raw units), taker_amount ≈ proceeds USDC (raw).
+        raw_shares = Decimal(str(getattr(response, "making_amount", 0) or 0))
+        raw_proceeds = Decimal(str(getattr(response, "taking_amount", 0) or 0))
+        shares_f = float(raw_shares / UNITS) if raw_shares > 0 else float(shares)
+        proceeds = float(raw_proceeds / UNITS) if raw_proceeds > 0 else 0.0
+        if proceeds <= 0 and shares_f > 0:
+            proceeds = shares_f * trigger
+        avg = proceeds / shares_f if shares_f > 0 else trigger
+        fee = fee_fn(proceeds, avg, taker=True, cfg=self.cfg)
+        return FillResult(
+            True,
+            shares=shares_f,
+            avg_price=avg,
+            fee=fee,
+            notional=proceeds,
+            order_id=encoded.get("order_id"),
+        )
+
+    def merge_pair(self, condition_id: str, shares: float) -> dict[str, Any]:
+        if self._client is None:
+            return {"ok": False, "reason": "not_connected"}
+        from live_executor import UNITS, ExecutionStopped, OrderNotSubmitted, merge_positions
+        from decimal import ROUND_DOWN
+
+        try:
+            amount_units = int(
+                (Decimal(str(shares)) * UNITS).to_integral_value(rounding=ROUND_DOWN)
+            )
+            result = self._run(
+                merge_positions(
+                    self._client, self.env_path, condition_id, amount=amount_units or "max"
+                )
+            )
+            return {
+                "ok": True,
+                "status": getattr(result, "status", str(result)),
+                "matched_shares": shares,
+            }
+        except (OrderNotSubmitted, ExecutionStopped) as exc:
+            return {"ok": False, "reason": str(exc)}
+        except Exception as exc:
+            log.exception("live merge failed")
+            return {"ok": False, "reason": f"merge_error:{type(exc).__name__}"}
+
+    def wallet_capital(self) -> float | None:
+        if self._client is None:
+            return None
+        from live_executor import collateral_available
+
+        try:
+            return float(self._run(collateral_available(self._client)))
+        except Exception:
+            return None
+
+
 class IntentExecutor:
     def __init__(self, engine: ArbEngine, client: BookClient):
         self.engine = engine
@@ -114,6 +260,7 @@ class IntentExecutor:
         pair = intent.pair
         meta = intent.meta or {}
         fill_at_limit = bool(meta.get("paper_fill_at_limit"))
+        live = not bool(getattr(self.engine.cfg, "paper_mode", True))
 
         if intent.kind == "enter_first" and pair is not None:
             fill = self.client.buy(
@@ -145,16 +292,24 @@ class IntentExecutor:
                             pair, hedge.shares, hedge.avg_price, hedge.fee, hedge.order_id
                         )
                         result["hedged"] = True
+                        if live and pair.status == "paired" and hasattr(self.client, "merge_pair"):
+                            merge = self.client.merge_pair(
+                                pair.condition_id, min(pair.first.shares, pair.second.shares)
+                            )
+                            result["merge"] = merge
+                            if merge.get("ok"):
+                                payout = float(merge.get("matched_shares") or 0)
+                                self.engine.on_pair_exited(pair, payout, 0.0)
+                                result["merged"] = True
                     else:
                         self.engine.store.log_event(
                             pair, "immediate_hedge_miss", reason=hedge.reason
                         )
-                        # Paper: do not leave unpaired inventory stacking — unwind first leg.
-                        if getattr(self.engine.cfg, "paper_mode", True):
-                            dump = self.client.sell(pair.first.token, pair.first.shares, 0.01)
-                            if dump.ok:
-                                self.engine.on_unpaired_closed(pair, dump.notional, dump.fee)
-                                result["unpaired_unwound"] = True
+                        # Unwind unpaired inventory (paper and live) — do not stack directional risk.
+                        dump = self.client.sell(pair.first.token, pair.first.shares, 0.01)
+                        if dump.ok:
+                            self.engine.on_unpaired_closed(pair, dump.notional, dump.fee)
+                            result["unpaired_unwound"] = True
             return result
 
         if intent.kind == "hedge_second" and pair is not None:
