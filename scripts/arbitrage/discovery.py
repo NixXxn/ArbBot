@@ -90,6 +90,9 @@ def discover_markets(cfg: ArbConfig, *, session: requests.Session | None = None)
                     "closed": "false",
                     "limit": page,
                     "offset": offset,
+                    # Match papertrader: highest 24h volume first.
+                    "order": "volume24hr",
+                    "ascending": "false",
                 },
                 timeout=20,
                 headers={"User-Agent": "Arbot/1.0"},

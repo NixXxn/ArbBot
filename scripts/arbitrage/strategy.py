@@ -60,6 +60,75 @@ class ArbEngine:
     def risk(self) -> RiskSnapshot:
         return snapshot(self.store, self.cfg)
 
+    def _plan_entry(self, quote: PairQuote, choice: LegChoice, pair_budget: float) -> dict[str, Any] | None:
+        """Papertrader-style taker FAK or paper maker fill-at-limit; keep sequential legs."""
+        cfg = self.cfg
+        paper = bool(getattr(cfg, "paper_mode", True))
+        ask_a, ask_b = choice.first_ask, choice.second_ask
+        pair_ask = ask_a + ask_b
+        book_shares = min(choice.first_size, choice.second_size, quote.executable_shares)
+
+        # --- Taker path (live asks already lock under paper/live cap) ---
+        taker = entry_ok(ask_a, ask_b, 1.0, cfg=cfg)
+        if taker.ok:
+            shares = min(pair_budget / max(pair_ask, 1e-9), book_shares)
+            if shares * ask_a < cfg.min_position_usd:
+                return {"reject": "size_too_small"}
+            max2 = max_second_leg_price(ask_a, cfg=cfg)
+            if ask_b > max2 + 1e-9:
+                return {"reject": "second_leg_unaffordable"}
+            return {
+                "mode": "taker",
+                "shares": shares,
+                "limit_first": round(ask_a, 4),
+                "limit_second": round(min(ask_b, max2), 4),
+                "expected_net": (1.0 - pair_ask) * shares,
+                "paper_fill_at_limit": bool(paper and cfg.paper_fak),
+            }
+
+        # --- Paper maker path (papertrader): asks up to max_maker_ask_sum, fill at limits ---
+        if not (paper and cfg.paper_fak):
+            return {"reject": taker.reason or "not_taker"}
+        maker_cap = float(getattr(cfg, "max_maker_ask_sum", 1.04) or 1.04)
+        if pair_ask > maker_cap + 1e-9:
+            return {"reject": "ask_sum_too_high"}
+
+        target_sum = float(cfg.max_pair_cost)
+        tick = float(cfg.maker_tick)
+        # Split limits so they sum to max_pair_cost and sit at/under asks.
+        raw_first = min(ask_a, target_sum * (ask_a / pair_ask))
+        raw_second = target_sum - raw_first
+        if raw_second > ask_b:
+            raw_second = ask_b
+            raw_first = target_sum - raw_second
+        limit_first = round(max(cfg.min_ask, min(raw_first, ask_a)), 4)
+        limit_second = round(max(cfg.min_ask, min(raw_second, ask_b)), 4)
+        # Shave a tick when asks sit above the locked target (true maker).
+        if pair_ask > target_sum + 1e-9:
+            limit_first = round(max(cfg.min_ask, min(ask_a - tick, target_sum * 0.5)), 4)
+            limit_second = round(max(cfg.min_ask, target_sum - limit_first), 4)
+            if limit_second >= ask_b:
+                limit_second = round(max(cfg.min_ask, ask_b - tick), 4)
+                limit_first = round(max(cfg.min_ask, target_sum - limit_second), 4)
+        if limit_first + limit_second > target_sum + 1e-9:
+            return {"reject": "limit_sum_too_high"}
+        locked_edge = 1.0 - (limit_first + limit_second)
+        if locked_edge + 1e-9 < cfg.min_edge:
+            return {"reject": "edge_too_small"}
+
+        pair_ref = limit_first + limit_second
+        shares = min(pair_budget / max(pair_ref, 1e-9), book_shares)
+        if shares * limit_first < cfg.min_position_usd:
+            return {"reject": "size_too_small"}
+        return {
+            "mode": "maker_paper",
+            "shares": shares,
+            "limit_first": limit_first,
+            "limit_second": limit_second,
+            "expected_net": locked_edge * shares,
+            "paper_fill_at_limit": True,
+        }
+
     def scan_entries(self, *, cash: float) -> list[Intent]:
         risk = self.risk()
         if not risk.entries_allowed:
@@ -93,40 +162,23 @@ class ArbEngine:
                 continue
             choice = choose_leg_order(quote)
             if choice is None:
-                rejects["unsafe_pair_completion"] = rejects.get("unsafe_pair_completion", 0) + 1
-                self._log(
-                    "skip",
-                    "unsafe_pair_completion",
-                    slug=market.slug,
-                    pair_ask=quote.pair_ask,
-                )
+                rejects["no_asks"] = rejects.get("no_asks", 0) + 1
                 continue
 
-            # Both legs must be executable at target size with fee-aware net.
-            shares = min(
-                pair_budget / max(quote.pair_ask, 1e-9),
-                quote.executable_shares,
-                choice.first_size,
-                choice.second_size,
-            )
-            depth_mult = float(getattr(self.cfg, "hedge_depth_multiple", 1.0) or 1.0)
-            if choice.second_size + 1e-9 < shares * depth_mult:
-                rejects["hedge_depth_thin"] = rejects.get("hedge_depth_thin", 0) + 1
+            planned = self._plan_entry(quote, choice, pair_budget)
+            if planned is None:
+                rejects["plan_reject"] = rejects.get("plan_reject", 0) + 1
                 continue
-            if shares * choice.first_ask < self.cfg.min_position_usd:
-                rejects["size_too_small"] = rejects.get("size_too_small", 0) + 1
-                continue
-            # Papertrader-aligned entry (paper: ~0.995 ask-sum, half min_edge, no fee drag).
-            fees = entry_ok(choice.first_ask, choice.second_ask, shares, cfg=self.cfg)
-            if not fees.ok:
-                rejects[fees.reason or "fee_gate"] = rejects.get(fees.reason or "fee_gate", 0) + 1
+            if planned.get("reject"):
+                rejects[planned["reject"]] = rejects.get(planned["reject"], 0) + 1
                 continue
 
-            # Pre-check second-leg affordability after a worst-case first fill at ask.
-            max2 = max_second_leg_price(choice.first_ask, cfg=self.cfg)
-            if choice.second_ask > max2 + 1e-9:
-                rejects["second_leg_unaffordable"] = rejects.get("second_leg_unaffordable", 0) + 1
-                continue
+            shares = float(planned["shares"])
+            limit_first = float(planned["limit_first"])
+            limit_second = float(planned["limit_second"])
+            expected_net = float(planned["expected_net"])
+            fill_at_limit = bool(planned["paper_fill_at_limit"])
+            mode = str(planned["mode"])
 
             pair = self.store.new_pair(
                 condition_id=market.condition_id,
@@ -134,28 +186,30 @@ class ArbEngine:
                 first=LegFill(outcome=choice.first_outcome, token=choice.first_token),
                 second=LegFill(outcome=choice.second_outcome, token=choice.second_token),
                 target_shares=shares,
-                expected_net=fees.net,
+                expected_net=expected_net,
             )
-            pair.max_second_price = max2
+            pair.max_second_price = limit_second
             self.store.log_event(
                 pair,
                 "entry_planned",
                 leg_order=choice.reason,
+                mode=mode,
                 first=choice.first_outcome,
                 second=choice.second_outcome,
-                first_ask=choice.first_ask,
-                second_ask=choice.second_ask,
+                limit_first=limit_first,
+                limit_second=limit_second,
                 shares=shares,
-                expected_net=fees.net,
-                max_second=max2,
+                expected_net=expected_net,
+                paper_fill_at_limit=fill_at_limit,
             )
             self._log(
                 "enter",
-                f"leg_order={choice.reason} first={choice.first_outcome}",
+                f"{mode} first={choice.first_outcome} via {choice.reason}",
                 slug=market.slug,
-                expected_net=round(fees.net, 4),
+                expected_net=round(expected_net, 4),
                 pair_ask=quote.pair_ask,
                 shares=round(shares, 4),
+                fill_at_limit=fill_at_limit,
             )
             intents.append(
                 Intent(
@@ -165,11 +219,17 @@ class ArbEngine:
                     choice=choice,
                     quote=quote,
                     shares=shares,
-                    limit_price=choice.first_ask,
+                    limit_price=limit_first,
                     token=choice.first_token,
                     outcome=choice.first_outcome,
-                    reason=f"first_leg {choice.first_outcome} via {choice.reason}",
-                    meta={"expected_net": fees.net, "max_second": max2, "fees": fees.__dict__},
+                    reason=f"{mode} first_leg {choice.first_outcome}",
+                    meta={
+                        "expected_net": expected_net,
+                        "max_second": limit_second,
+                        "second_limit": limit_second,
+                        "paper_fill_at_limit": fill_at_limit,
+                        "mode": mode,
+                    },
                 )
             )
             claimed.add(market.slug)

@@ -117,7 +117,7 @@ def test_leg_order_buys_rising_leg_first():
     assert choice.reason.startswith("rise_")
 
 
-def test_refuse_when_counterleg_too_thin():
+def test_leg_order_still_picks_when_one_side_thin():
     m = _market()
     quote = PairQuote(
         market=m,
@@ -128,7 +128,65 @@ def test_refuse_when_counterleg_too_thin():
         executable_shares=0.5,
         age_ms=0,
     )
-    assert choose_leg_order(quote) is None
+    choice = choose_leg_order(quote)
+    assert choice is not None
+
+
+def test_maker_paper_path_plans_fill_at_limit(tmp_path, cfg):
+    """Papertrader maker window: ask_sum ~1.03 still yields equal-share limit fills."""
+    cfg.paper_mode = True
+    cfg.paper_fak = True
+    cfg.max_pair_cost = 0.94
+    cfg.max_maker_ask_sum = 1.04
+    cfg.min_edge = 0.025
+    engine = ArbEngine(cfg, PairStore(tmp_path / "pairs.json"), discover_fn=lambda c: [])
+    m = _market()
+    quote = PairQuote(
+        market=m,
+        book_a=LegBook(bid=0.50, ask=0.52, bid_size=40, ask_size=40, spread=0.02, mid=0.51, fetched_ms=0),
+        book_b=LegBook(bid=0.49, ask=0.51, bid_size=40, ask_size=40, spread=0.02, mid=0.50, fetched_ms=0),
+        pair_ask=1.03,
+        pair_bid=0.99,
+        executable_shares=40,
+        age_ms=0,
+    )
+    choice = choose_leg_order(quote)
+    assert choice is not None
+    plan = engine._plan_entry(quote, choice, pair_budget=45.0)
+    assert plan is not None
+    assert plan.get("reject") is None
+    assert plan["mode"] == "maker_paper"
+    assert plan["paper_fill_at_limit"] is True
+    assert plan["limit_first"] + plan["limit_second"] <= cfg.max_pair_cost + 1e-9
+    assert plan["shares"] > 0
+
+
+def test_paper_fill_at_limit_buys_without_live_ask(tmp_path, cfg):
+    cfg.paper_mode = True
+    cfg.immediate_hedge = True
+    store = PairStore(tmp_path / "pairs.json")
+    engine = ArbEngine(cfg, store, discover_fn=lambda c: [])
+    from arbitrage.pair_state import LegFill
+    from arbitrage.executor_bridge import PaperBookClient, IntentExecutor
+    from arbitrage.strategy import Intent
+
+    pair = store.new_pair(
+        condition_id="c", slug="s",
+        first=LegFill(outcome="Yes", token="tokA"),
+        second=LegFill(outcome="No", token="tokB"),
+        target_shares=10, expected_net=0.5,
+    )
+    client = PaperBookClient(cfg)
+    ex = IntentExecutor(engine, client)
+    result = ex.execute(Intent(
+        kind="enter_first", pair=pair, shares=10, limit_price=0.47, token="tokA", outcome="Yes",
+        meta={"paper_fill_at_limit": True, "second_limit": 0.47},
+    ))
+    assert result["ok"]
+    assert result.get("hedged") is True
+    assert pair.status == "paired"
+    assert abs(pair.first.avg_price - 0.47) < 1e-9
+    assert abs(pair.second.avg_price - 0.47) < 1e-9
 
 
 class ScriptedClient:
@@ -136,8 +194,8 @@ class ScriptedClient:
         self.fills = list(fills)
         self.calls = []
 
-    def buy(self, token, shares, limit_price):
-        self.calls.append(("buy", token, shares, limit_price))
+    def buy(self, token, shares, limit_price, *, fill_at_limit: bool = False):
+        self.calls.append(("buy", token, shares, limit_price, fill_at_limit))
         return self.fills.pop(0)
 
     def sell(self, token, shares, limit_price):
