@@ -243,7 +243,27 @@ class DashboardTests(TestCase):
         supervisor.lock=threading.RLock()
         result=supervisor.status()
         self.assertEqual(result["portfolio"]["capital"],100)
+        self.assertEqual(result["portfolio"]["equity"],100)
         self.assertEqual(result["portfolio"]["open_exposure"],6)
+        self.assertEqual(result["live_execution"],"paper_sim")
+
+    def test_live_mode_shows_paper_arb_equity(self):
+        """Live still runs the paper arb worker; capital must come from that portfolio."""
+        (self.root/"replica-paper-portfolio.json").write_text(json.dumps({
+            "budget":1000,"equity":1000,"open_exposure":40,"max_exposure":300,
+            "strategy_stats":{"arbitrage":{"trades":3,"pnl":12.5}},
+            "pairs":[{"id":"p1"}],"pnl_breakdown":{"locked_pair_profit":1.2}}))
+        supervisor=dashboard_server.Supervisor.__new__(dashboard_server.Supervisor)
+        supervisor.desired_mode="live";supervisor.current_mode="live"
+        supervisor.process=None;supervisor.transition=False;supervisor.last_exit=None
+        supervisor.paper_budget=1000;supervisor.strategy="arbitrage"
+        supervisor.live_sizing="minimum";supervisor.live_state_path=None
+        supervisor.lock=threading.RLock()
+        result=supervisor.status()
+        self.assertEqual(result["portfolio"]["equity"],1000)
+        self.assertEqual(result["strategy_stats"]["arbitrage"]["trades"],3)
+        self.assertEqual(result["pairs"][0]["id"],"p1")
+        self.assertEqual(result["live_execution"],"paper_sim")
 
     def test_durable_live_statistics_are_visible_between_workers(self):
         (self.root/"replica-portfolio-live.json").write_text(json.dumps({
@@ -258,6 +278,12 @@ class DashboardTests(TestCase):
         result=supervisor.status()
         self.assertEqual(result["strategy_stats"]["combined"]["trades"],12)
         self.assertEqual(result["portfolio"]["capital"],104.5)
+        self.assertEqual(result["portfolio"]["equity"],104.5)
+
+    def test_dashboard_capital_reads_equity_or_capital(self):
+        html=(Path(dashboard_server.__file__).with_name("dashboard.html")).read_text()
+        self.assertIn("portfolio.equity??portfolio.capital",html)
+        self.assertIn("live_execution==='paper_sim'",html)
 
     def test_completed_legacy_state_does_not_block_unique_live_session(self):
         legacy = self.root / "replica-live-state.json"

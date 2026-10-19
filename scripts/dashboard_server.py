@@ -519,44 +519,50 @@ class Supervisor:
         if live_state:
             result["live_state"] = live_state
             result["live_state_file"] = live_state_path.name
-        # Show paper portfolio whenever paper is desired, including the brief restart window.
-        if result["current_mode"] == "paper" or result["desired_mode"] == "paper":
-            health_by_asset, fills = {}, []
-            labels = active_feeds(self.strategy)
-            portfolio = read_json(DATA_DIR / "replica-paper-portfolio.json") or {}
-            health_by_asset.update(portfolio.get("engine_health", {}))
+        # Live currently launches the same arb paper runner (no CLOB orders yet).
+        # Always surface that portfolio so Capital / pairs / PnL stay visible in live mode.
+        paper_mode = result["current_mode"] == "paper" or result["desired_mode"] == "paper"
+        live_mode = result["current_mode"] == "live" or result["desired_mode"] == "live"
+        result["live_execution"] = "paper_sim" if live_mode else None
+        health_by_asset, fills = {}, []
+        labels = active_feeds(self.strategy)
+        paper = read_json(DATA_DIR / "replica-paper-portfolio.json") or {}
+        if paper_mode or live_mode:
+            health_by_asset.update(paper.get("engine_health", {}))
             for asset in labels:
                 journal = DATA_DIR / f"replica-paper-{asset}.jsonl"
                 health, fill = recent_events(journal)
-                if health:health_by_asset[asset] = health
-                if fill:fills.append((journal.stat().st_mtime,fill))
+                if health:
+                    health_by_asset[asset] = health
+                if fill:
+                    fills.append((journal.stat().st_mtime, fill))
             portfolio_journal = DATA_DIR / "replica-paper-portfolio.jsonl"
             if portfolio_journal.exists():
                 _, fill = recent_events(portfolio_journal)
-                if fill:fills.append((portfolio_journal.stat().st_mtime,fill))
-            aggregate = {"type":"health", "events":{}, "signals":0,
-                         "paper_fills":0, "paper_spend":0}
+                if fill:
+                    fills.append((portfolio_journal.stat().st_mtime, fill))
+            aggregate = {"type": "health", "events": {}, "signals": 0,
+                         "paper_fills": 0, "paper_spend": 0}
             for health in health_by_asset.values():
-                for name,count in health.get("events",{}).items():
-                    aggregate["events"][name]=aggregate["events"].get(name,0)+count
-                for key in ("signals","paper_fills","paper_spend"):
-                    aggregate[key]+=health.get(key,0)
+                for name, count in health.get("events", {}).items():
+                    aggregate["events"][name] = aggregate["events"].get(name, 0) + count
+                for key in ("signals", "paper_fills", "paper_spend"):
+                    aggregate[key] += health.get(key, 0)
             result["engine_health_by_asset"] = health_by_asset
             result["engine_health"] = aggregate
-            result["latest_paper_fill"] = max(fills,key=lambda row:row[0])[1] if fills else None
-            result["strategy_stats"] = portfolio.get("strategy_stats", {})
-            result["portfolio"] = {key:portfolio.get(key) for key in
-                                   ("budget","equity","open_exposure","max_exposure","exposure_rate")}
-            result["risk_controls"] = portfolio.get("risk_controls", {})
-            result["pairs"] = portfolio.get("pairs", [])
-            result["pnl_breakdown"] = portfolio.get("pnl_breakdown", {})
-            # Overlay file always wins so Apply settings is visible immediately.
-            baked = dict(portfolio.get("arb_config") or {})
+            result["latest_paper_fill"] = max(fills, key=lambda row: row[0])[1] if fills else None
+            result["strategy_stats"] = paper.get("strategy_stats", {})
+            result["portfolio"] = {key: paper.get(key) for key in
+                                   ("budget", "equity", "available", "open_exposure",
+                                    "max_exposure", "exposure_rate")}
+            result["risk_controls"] = paper.get("risk_controls", {})
+            result["pairs"] = paper.get("pairs", [])
+            result["pnl_breakdown"] = paper.get("pnl_breakdown", {})
+            baked = dict(paper.get("arb_config") or {})
             overlay = read_json(DATA_DIR / "arb-settings.json") or {}
             baked.update({k: v for k, v in overlay.items() if k != "updated_at_ms"})
             result["arb_config"] = baked
-            result["recent_decisions"] = portfolio.get("recent_decisions", [])
-            # Prefer arb journal for health
+            result["recent_decisions"] = paper.get("recent_decisions", [])
             arb_journal = DATA_DIR / "replica-paper-arbitrage.jsonl"
             if arb_journal.exists():
                 health, fill = recent_events(arb_journal)
@@ -564,17 +570,37 @@ class Supervisor:
                     result["engine_health_by_asset"] = {"arbitrage": health}
                 if fill:
                     result["latest_paper_fill"] = fill
-        else:
+        if live_mode and not paper_mode:
+            # Pure live view: overlay wallet/legacy capital when paper equity is missing.
             durable = read_json(DATA_DIR / "replica-portfolio-live.json") or {}
-            result["engine_health"] = (live_state or {}).get("engine_health")
-            result["engine_health_by_asset"] = (live_state or {}).get("engine_health_by_asset",{})
-            result["latest_paper_fill"] = None
-            result["strategy_stats"] = ((live_state or {}).get("strategy_stats")
-                                        or durable.get("strategy_stats", {}))
-            result["portfolio"] = ((live_state or {}).get("portfolio")
-                                   or durable.get("portfolio", {}))
-            result["risk_controls"] = ((live_state or {}).get("risk_controls")
-                                       or durable.get("risk_controls", {}))
+            live_pf = ((live_state or {}).get("portfolio")
+                       or durable.get("portfolio") or {})
+            if not result.get("strategy_stats") and durable.get("strategy_stats"):
+                result["strategy_stats"] = durable.get("strategy_stats", {})
+            if (live_state or {}).get("engine_health"):
+                result["engine_health"] = live_state.get("engine_health")
+            if (live_state or {}).get("engine_health_by_asset"):
+                result["engine_health_by_asset"] = live_state.get("engine_health_by_asset")
+            if (live_state or {}).get("risk_controls") or durable.get("risk_controls"):
+                result["risk_controls"] = ((live_state or {}).get("risk_controls")
+                                           or durable.get("risk_controls", {}))
+            portfolio = dict(result.get("portfolio") or {})
+            if portfolio.get("equity") is None:
+                capital = live_pf.get("equity", live_pf.get("capital"))
+                if capital is not None:
+                    portfolio["equity"] = capital
+                    portfolio.setdefault("capital", live_pf.get("capital", capital))
+                    for key in ("available", "open_exposure", "max_exposure", "exposure_rate"):
+                        if portfolio.get(key) is None and live_pf.get(key) is not None:
+                            portfolio[key] = live_pf[key]
+            elif live_pf.get("capital") is not None:
+                portfolio.setdefault("capital", live_pf["capital"])
+            result["portfolio"] = portfolio
+        # Always expose equity alias when only capital is present (legacy live snapshots).
+        portfolio = dict(result.get("portfolio") or {})
+        if portfolio.get("equity") is None and portfolio.get("capital") is not None:
+            portfolio["equity"] = portfolio["capital"]
+        result["portfolio"] = portfolio
         result["files"] = [
             {"name": path.name, "size": path.stat().st_size, "modified": int(path.stat().st_mtime)}
             for path in safe_files()

@@ -145,7 +145,8 @@ async function status(){
     $('worker').innerHTML=s.worker_running?`<span class="ok">running</span> · ${s.worker_pid}`:'<span class="bad">stopped</span>';
     const total=stats.combined||stats.arbitrage||{};
     $('pnl').innerHTML=money(total.pnl);
-    $('capital').textContent=portfolio.equity!=null?`$${Number(portfolio.equity).toFixed(2)}`:'—';
+    const capital=portfolio.equity??portfolio.capital;
+    $('capital').textContent=capital!=null?`$${Number(capital).toFixed(2)}`:'—';
     $('locked').innerHTML=money(br.locked_pair_profit);
     $('expected').innerHTML=money(br.expected_profit);
     $('unpairedRisk').innerHTML=money(br.unpaired_directional_risk);
@@ -160,9 +161,11 @@ async function status(){
     if(!selected||!names.includes(selected))selected=names[0]||'';
     $('files').innerHTML=(s.files||[]).map(f=>`<option value="${esc(f.name)}" ${f.name===selected?'selected':''}>${esc(f.name)} · ${(f.size/1024).toFixed(1)} KiB</option>`).join('');
     $('download').href='/api/download?name='+encodeURIComponent(selected);
-    $('message').textContent=actionError||(!s.live_enabled
-      ?`LIVE_KILL=1: live locked. Locked profits are fee-aware matched pairs only; expected is pre-hedge; unpaired is directional risk.`
-      :`Live unlocked. Non-atomic fills can leave unpaired inventory.`);
+    if(actionError)$('message').textContent=actionError;
+    else if(!s.live_enabled)$('message').textContent=`LIVE_KILL=1: live locked. Locked profits are fee-aware matched pairs only; expected is pre-hedge; unpaired is directional risk.`;
+    else if(s.live_execution==='paper_sim'&&(s.current_mode==='live'||s.desired_mode==='live'))
+      $('message').textContent=`Live label is on, but the worker is still the paper arb simulator (no CLOB orders). Capital is paper equity — switch works; funded live arb is not enabled yet.`;
+    else $('message').textContent=`Live unlocked. Non-atomic fills can leave unpaired inventory.`;
     if(selected)await loadLog();
   }catch(e){$('clock').textContent='Dashboard error';$('message').textContent=e.message}
 }
