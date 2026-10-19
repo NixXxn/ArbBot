@@ -10,7 +10,7 @@ import requests
 
 from .config import ArbConfig
 from .discovery import ArbMarket, discover_markets
-from .fees import max_second_leg_price, pair_net
+from .fees import entry_ok, max_second_leg_price, pair_net
 from .leg_order import LegChoice, choose_leg_order
 from .pair_state import LegFill, PairRecord, PairStore
 from .quote import PairQuote, fetch_book, quote_pair
@@ -109,14 +109,15 @@ class ArbEngine:
                 choice.first_size,
                 choice.second_size,
             )
-            depth_mult = float(getattr(self.cfg, "hedge_depth_multiple", 1.25) or 1.25)
+            depth_mult = float(getattr(self.cfg, "hedge_depth_multiple", 1.0) or 1.0)
             if choice.second_size + 1e-9 < shares * depth_mult:
                 rejects["hedge_depth_thin"] = rejects.get("hedge_depth_thin", 0) + 1
                 continue
             if shares * choice.first_ask < self.cfg.min_position_usd:
                 rejects["size_too_small"] = rejects.get("size_too_small", 0) + 1
                 continue
-            fees = pair_net(choice.first_ask, choice.second_ask, shares, cfg=self.cfg)
+            # Papertrader-aligned entry (paper: ~0.995 ask-sum, half min_edge, no fee drag).
+            fees = entry_ok(choice.first_ask, choice.second_ask, shares, cfg=self.cfg)
             if not fees.ok:
                 rejects[fees.reason or "fee_gate"] = rejects.get(fees.reason or "fee_gate", 0) + 1
                 continue
@@ -272,8 +273,8 @@ class ArbEngine:
             return []
 
         use_price = min(limit, second_ask if second_ask is not None else limit)
-        # Final fee check with actual fill1.
-        check = pair_net(pair.first.avg_price, use_price, need, cfg=self.cfg)
+        # Final affordability check with actual fill1 (paper uses papertrader-style cap).
+        check = entry_ok(pair.first.avg_price, use_price, need, cfg=self.cfg)
         if not check.ok and (pair.unpaired_age_seconds() or 0) < self.cfg.hedge_timeout_seconds:
             self._log("wait_hedge", check.reason or "net_fail", slug=pair.slug)
             return []

@@ -147,6 +147,33 @@ class DashboardTests(TestCase):
         with self.assertRaisesRegex(ValueError, "arbitrage"):
             dashboard_server.normalize_strategy("kraken")
 
+    def test_arb_settings_overlay_wins_in_status(self):
+        dashboard_server.atomic_json(
+            self.root / "replica-paper-portfolio.json",
+            {
+                "strategy_stats": {"arbitrage": {"trades": 0}, "combined": {"trades": 0}},
+                "budget": 100, "equity": 100, "open_exposure": 0, "max_exposure": 30,
+                "exposure_rate": 0.3, "engine_health": {},
+                "arb_config": {"max_pair_cost": 0.94, "min_edge": 0.025},
+            },
+        )
+        dashboard_server.atomic_json(
+            self.root / "arb-settings.json",
+            {"max_pair_cost": 0.97, "min_edge": 0.01},
+        )
+        supervisor = dashboard_server.Supervisor.__new__(dashboard_server.Supervisor)
+        supervisor.desired_mode = "paper"
+        supervisor.current_mode = "paper"
+        supervisor.process = None
+        supervisor.transition = False
+        supervisor.last_exit = None
+        supervisor.paper_budget = 100
+        supervisor.strategy = "arbitrage"
+        supervisor.lock = threading.RLock()
+        result = supervisor.status()
+        self.assertEqual(result["arb_config"]["max_pair_cost"], 0.97)
+        self.assertEqual(result["arb_config"]["min_edge"], 0.01)
+
     def test_statistics_reset_targets_arbitrage(self):
         supervisor = dashboard_server.Supervisor.__new__(dashboard_server.Supervisor)
         supervisor.lock = threading.RLock()

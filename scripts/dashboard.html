@@ -200,8 +200,10 @@ async function saveArb(){
     payload[k]=Number($(k).value);
   }
   try{
-    await api('/api/arb-settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-    $('message').textContent='Arbitrage settings applied; paper worker restarting.';
+    const result=await api('/api/arb-settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    fillSettings(result.arb_config||payload);
+    actionError='';
+    $('message').textContent=`Settings applied (max_pair_cost=${payload.max_pair_cost}). Worker reloads overlay live.`;
     await status();
   }catch(e){$('message').textContent=e.message}
 }

@@ -42,27 +42,43 @@ def test_load_config_defaults():
     path = ROOT / "config" / "arbitrage.yaml"
     loaded = load_arb_config(path)
     assert loaded.max_pair_cost == 0.94
+    assert loaded.max_maker_ask_sum == 1.04
+    assert loaded.paper_taker_cap == 0.995
+    assert loaded.paper_mode is True
     assert loaded.min_edge == 0.025
     assert loaded.safety_margin == 0.005
-    assert loaded.hedge_timeout_seconds == 60
+    assert loaded.hedge_timeout_seconds == 120
     assert loaded.immediate_hedge is True
-    assert loaded.max_concurrent_unpaired == 2
+    assert loaded.max_concurrent_unpaired == 4
+
+
+def test_paper_entry_matches_papertrader_looseness(cfg):
+    from arbitrage.fees import entry_ok
+
+    cfg.paper_mode = True
+    # Paper takes ask-sum up to ~0.995 with half min_edge.
+    ok = entry_ok(0.48, 0.50, 10.0, cfg=cfg)
+    assert ok.ok
+    assert abs(ok.net - 0.2) < 1e-9
+    bad = entry_ok(0.50, 0.50, 10.0, cfg=cfg)
+    assert not bad.ok
 
 
 def test_pair_net_fee_aware(cfg):
+    cfg.paper_mode = False
+    cfg.paper_relax_fees = False
     ok = pair_net(0.40, 0.50, 10.0, cfg=cfg)
     assert ok.guaranteed_payout == 10.0
     assert ok.total_cost > 9.0
     assert ok.net < 1.0
-    # Too expensive after fees
     bad = pair_net(0.48, 0.48, 10.0, cfg=cfg)
     assert not bad.ok
 
 
 def test_max_second_from_fill(cfg):
+    cfg.paper_mode = True
     max2 = max_second_leg_price(0.42, cfg=cfg)
-    assert 0 < max2 <= 0.94 - 0.42 + 1e-9
-    # After expensive first fill, second cap shrinks
+    assert abs(max2 - (0.995 - 0.42)) < 1e-9
     tight = max_second_leg_price(0.90, cfg=cfg)
     assert tight < max_second_leg_price(0.40, cfg=cfg)
 

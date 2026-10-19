@@ -40,6 +40,12 @@ def _parse_simple_yaml(text: str) -> dict:
 @dataclass
 class ArbConfig:
     max_pair_cost: float = 0.94
+    # Papertrader: allow quoting when asks are slightly over $1 (maker / paper path).
+    max_maker_ask_sum: float = 1.04
+    paper_taker_cap: float = 0.995
+    paper_mode: bool = True
+    paper_fak: bool = True
+    paper_relax_fees: bool = True
     min_edge: float = 0.025
     fee_buffer: float = 0.01
     safety_margin: float = 0.005
@@ -51,20 +57,21 @@ class ArbConfig:
     min_ask: float = 0.02
     max_ask: float = 0.95
     min_ask_size: float = 3.0
-    hedge_depth_multiple: float = 1.25
+    # 1.0 = counterleg must cover target size (papertrader-like); >1 is stricter.
+    hedge_depth_multiple: float = 1.0
     position_usd: float = 45.0
     max_position_usd: float = 110.0
     max_open_pairs: int = 8
-    max_unpaired_notional: float = 45.0
-    max_concurrent_unpaired: int = 2
+    max_unpaired_notional: float = 90.0
+    max_concurrent_unpaired: int = 4
     max_unpaired_loss: float = 0.02
     max_capital_locked: float = 500.0
-    hedge_timeout_seconds: float = 60.0
-    max_quote_age_ms: int = 2500
+    hedge_timeout_seconds: float = 120.0
+    max_quote_age_ms: int = 5000
     min_pair_profit_pct: float = 0.005
     pair_bid_sum_exit: float = 0.99
     scan_limit: int = 250
-    prefer_crypto_weather: bool = True
+    prefer_crypto_weather: bool = False
     maker_tick: float = 0.01
     immediate_hedge: bool = True
     min_position_usd: float = 2.0

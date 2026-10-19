@@ -207,15 +207,20 @@ def main(argv: list[str] | None = None) -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     data_dir.mkdir(parents=True, exist_ok=True)
-    cfg = load_arb_config(config_path)
-    overlay_path = data_dir / "arb-settings.json"
-    if overlay_path.exists():
+    def apply_overlay(base: ArbConfig) -> ArbConfig:
+        overlay_path = data_dir / "arb-settings.json"
+        if not overlay_path.exists():
+            return base
         try:
             overlay = json.loads(overlay_path.read_text(encoding="utf-8"))
             if isinstance(overlay, dict):
-                cfg.update(overlay)
+                base.update({k: v for k, v in overlay.items() if k != "updated_at_ms"})
         except (OSError, ValueError):
             pass
+        return base
+
+    cfg = apply_overlay(load_arb_config(config_path))
+    cfg.paper_mode = True
     # Overlay dashboard budget
     if budget > 0:
         cfg.starting_balance = budget
@@ -239,6 +244,7 @@ def main(argv: list[str] | None = None) -> int:
     engine = ArbEngine(cfg, store)
     client = PaperBookClient(cfg, session=engine.session)
     executor = IntentExecutor(engine, client)
+    last_overlay_mtime = 0.0
 
     append_event(journal_path, {
         "type": "arbot_start",
@@ -250,11 +256,32 @@ def main(argv: list[str] | None = None) -> int:
 
     deadline = time.time() + seconds
     while time.time() < deadline:
+        # Hot-reload dashboard overlay without requiring a full process restart.
+        overlay_path = data_dir / "arb-settings.json"
+        try:
+            mtime = overlay_path.stat().st_mtime if overlay_path.exists() else 0.0
+        except OSError:
+            mtime = 0.0
+        if mtime > last_overlay_mtime:
+            last_overlay_mtime = mtime
+            engine.cfg = apply_overlay(load_arb_config(config_path))
+            engine.cfg.paper_mode = True
+            if budget > 0:
+                engine.cfg.starting_balance = budget
+            client.cfg = engine.cfg
+            append_event(journal_path, {
+                "type": "arb_settings_reloaded",
+                "config": engine.cfg.to_dict(),
+                "at_ms": int(time.time() * 1000),
+            })
+            log.info("reloaded arb settings from %s", overlay_path)
+
         cash = budget
         # Approximate free cash: budget - open notionals + realized
         breakdown = pnl_breakdown(store)
         open_n = sum(p.first.notional + p.second.notional for p in store.open_pairs())
         cash = max(0.0, budget + breakdown["realized_pnl"] - open_n)
+        cfg = engine.cfg
 
         results = []
         # Always process hedges/exits before new entries.

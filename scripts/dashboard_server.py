@@ -417,19 +417,45 @@ class Supervisor:
             return {"ok": True, "strategy": value, "reset_at_ms": now}
 
     def set_arb_settings(self, payload: dict) -> dict:
-        """Persist editable arb knobs into config/arbitrage.yaml overlay in data dir."""
+        """Persist editable arb knobs; overlay wins over baked portfolio config."""
         allowed = {
-            "max_pair_cost", "min_edge", "fee_buffer", "safety_margin",
+            "max_pair_cost", "max_maker_ask_sum", "paper_taker_cap",
+            "min_edge", "fee_buffer", "safety_margin",
             "position_usd", "max_position_usd", "max_open_pairs",
             "hedge_timeout_seconds", "max_unpaired_notional", "max_capital_locked",
             "min_pair_profit_pct", "pair_bid_sum_exit", "scan_limit",
+            "min_ask", "max_ask", "min_ask_size", "hedge_depth_multiple",
+            "max_concurrent_unpaired", "immediate_hedge",
         }
-        overlay = {k: payload[k] for k in allowed if k in payload}
+        overlay = {}
+        for key in allowed:
+            if key not in payload:
+                continue
+            value = payload[key]
+            if isinstance(value, bool) or key in ("immediate_hedge",):
+                overlay[key] = bool(value)
+            else:
+                try:
+                    overlay[key] = float(value) if key not in (
+                        "max_open_pairs", "scan_limit", "max_concurrent_unpaired",
+                        "max_quote_age_ms",
+                    ) else int(float(value))
+                except (TypeError, ValueError) as error:
+                    raise ValueError(f"Invalid {key}") from error
         path = DATA_DIR / "arb-settings.json"
         current = read_json(path) or {}
         current.update(overlay)
+        current["updated_at_ms"] = int(time.time() * 1000)
         atomic_json(path, current)
-        # Restart paper worker so settings apply.
+        # Patch portfolio immediately so the UI does not keep showing stale arb_config.
+        portfolio_path = DATA_DIR / "replica-paper-portfolio.json"
+        portfolio = read_json(portfolio_path)
+        if portfolio is not None:
+            merged = dict(portfolio.get("arb_config") or {})
+            merged.update(current)
+            portfolio["arb_config"] = merged
+            portfolio["updated_at_ms"] = int(time.time() * 1000)
+            atomic_json(portfolio_path, portfolio)
         with self.lock:
             self._persist()
         if self.desired_mode == "paper":
@@ -524,7 +550,11 @@ class Supervisor:
             result["risk_controls"] = portfolio.get("risk_controls", {})
             result["pairs"] = portfolio.get("pairs", [])
             result["pnl_breakdown"] = portfolio.get("pnl_breakdown", {})
-            result["arb_config"] = portfolio.get("arb_config") or (read_json(DATA_DIR / "arb-settings.json") or {})
+            # Overlay file always wins so Apply settings is visible immediately.
+            baked = dict(portfolio.get("arb_config") or {})
+            overlay = read_json(DATA_DIR / "arb-settings.json") or {}
+            baked.update({k: v for k, v in overlay.items() if k != "updated_at_ms"})
+            result["arb_config"] = baked
             result["recent_decisions"] = portfolio.get("recent_decisions", [])
             # Prefer arb journal for health
             arb_journal = DATA_DIR / "replica-paper-arbitrage.jsonl"

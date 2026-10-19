@@ -107,7 +107,9 @@ def quote_pair(
         return None, "ask_too_expensive"
 
     pair_ask = book_a.ask + book_b.ask
-    if pair_ask > cfg.max_pair_cost + 1e-9:
+    # Papertrader quotes up to max_maker_ask_sum; entry gate decides taker vs skip.
+    quote_cap = float(getattr(cfg, "max_maker_ask_sum", cfg.max_pair_cost) or cfg.max_pair_cost)
+    if pair_ask > quote_cap + 1e-9:
         return None, "ask_sum_too_high"
 
     pair_bid = None
