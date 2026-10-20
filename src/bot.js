@@ -61,26 +61,47 @@ export class ArbitrageBot {
   }
 
   async fetchMarkets() {
-    const polymarketId = this.extractMarketId(this.config.polymarketUrl, 'polymarket');
-    const kalshiId = this.extractMarketId(this.config.kalshiUrl, 'kalshi');
+    const scanAll = Boolean(this.config.scanAll);
 
     const fetchPoly = async () => {
-      if (typeof this.polymarket.getMarketsBySlug === 'function') {
-        return this.polymarket.getMarketsBySlug(polymarketId);
+      if (!scanAll) {
+        const polymarketId = this.extractMarketId(this.config.polymarketUrl, 'polymarket');
+        if (!polymarketId) return [];
+        if (typeof this.polymarket.getMarketsBySlug === 'function') {
+          return this.polymarket.getMarketsBySlug(polymarketId);
+        }
+        return this.polymarket.fetchMarkets({ slug: polymarketId, limit: 50 });
       }
-      return this.polymarket.fetchMarkets({ slug: polymarketId, limit: 50 });
+      const params = {
+        limit: this.config.scanLimitPoly || 100,
+        sort: this.config.scanSort || 'volume',
+      };
+      if (this.config.scanQuery) params.query = this.config.scanQuery;
+      return this.polymarket.fetchMarkets(params);
     };
+
     const fetchKalshi = async () => {
-      if (typeof this.kalshi.getMarketsBySlug === 'function') {
-        return this.kalshi.getMarketsBySlug(kalshiId);
+      if (!scanAll) {
+        const kalshiId = this.extractMarketId(this.config.kalshiUrl, 'kalshi');
+        if (!kalshiId) return [];
+        if (typeof this.kalshi.getMarketsBySlug === 'function') {
+          return this.kalshi.getMarketsBySlug(kalshiId);
+        }
+        return this.kalshi.fetchMarkets({ slug: kalshiId, limit: 50 });
       }
-      return this.kalshi.fetchMarkets({ slug: kalshiId, limit: 50 });
+      const params = {
+        limit: this.config.scanLimitKalshi || 100,
+        sort: this.config.scanSort || 'volume',
+      };
+      if (this.config.scanQuery) params.query = this.config.scanQuery;
+      return this.kalshi.fetchMarkets(params);
     };
 
     const [polymarketMarkets, kalshiMarkets] = await Promise.all([fetchPoly(), fetchKalshi()]);
     return {
       polymarketMarkets: Array.isArray(polymarketMarkets) ? polymarketMarkets : [],
       kalshiMarkets: Array.isArray(kalshiMarkets) ? kalshiMarkets : [],
+      scanAll,
     };
   }
 
@@ -455,11 +476,12 @@ export class ArbitrageBot {
       tradingMode: this.config.tradingMode,
       polymarketUrl: this.config.polymarketUrl,
       kalshiUrl: this.config.kalshiUrl,
+      scanAll: this.config.scanAll,
       pollIntervalSeconds: this.config.pollIntervalSeconds,
     });
     pushLog(
       'info',
-      `Bot started | every ${this.config.pollIntervalSeconds}s | min ${this.config.minProfitCents}¢ | ${this.config.tradingMode} | dryRun=${this.config.dryRun} | rebalance=${this.config.rebalanceEnabled}`,
+      `Bot started | every ${this.config.pollIntervalSeconds}s | min ${this.config.minProfitCents}¢ | ${this.config.tradingMode} | dryRun=${this.config.dryRun} | rebalance=${this.config.rebalanceEnabled} | scanAll=${this.config.scanAll} | match≥${this.config.matchingThreshold}`,
     );
     await this.rebalanceAfterPnl('start');
     await this.poll();

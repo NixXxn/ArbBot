@@ -43,7 +43,12 @@ Live trades require `LIVE_KILL=0` and `DRY_RUN=false` plus venue credentials.
 
 | Env | Default | Notes |
 |-----|---------|--------|
-| `POLYMARKET_URL` / `KALSHI_URL` | sample Fed-chair event | Event URLs to pair |
+| `SCAN_ALL` | `true` if URLs empty | Scan top markets on both venues and fuzzy-match all |
+| `SCAN_LIMIT_POLY` / `SCAN_LIMIT_KALSHI` | `100` | How many markets to pull per venue |
+| `SCAN_QUERY` | empty | Optional text filter |
+| `MATCHING_THRESHOLD` | `0.6` (scan) / `0.7` | Fuzzy title match (lower = more pairs) |
+| `TOP_N_OPPORTUNITIES` | `20` (scan) | How many arb rows to keep |
+| `POLYMARKET_URL` / `KALSHI_URL` | empty | Single-event mode when `SCAN_ALL=false` |
 | `TRADING_MODE` | `CONSERVATIVE` | or `YOLO` |
 | `TRADE_AMOUNT_CENTS` | `100` | per leg in CONSERVATIVE |
 | `MIN_PROFIT_CENTS` | `1` | entry floor |

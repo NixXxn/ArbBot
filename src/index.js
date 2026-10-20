@@ -20,8 +20,8 @@ async function main() {
     pollIntervalSeconds: config.pollIntervalSeconds,
   });
 
-  if (!config.polymarketUrl || !config.kalshiUrl) {
-    console.error('Set POLYMARKET_URL and KALSHI_URL');
+  if (!config.scanAll && (!config.polymarketUrl || !config.kalshiUrl)) {
+    console.error('Set POLYMARKET_URL + KALSHI_URL, or SCAN_ALL=true for universe matching');
     process.exit(1);
   }
 

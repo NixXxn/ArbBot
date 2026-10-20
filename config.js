@@ -23,23 +23,30 @@ function envNum(name, fallback) {
 const liveKill = env('LIVE_KILL', '1') !== '0';
 const dryRun = liveKill || envBool('DRY_RUN', true);
 
+// SCAN_ALL=true (or empty URLs) → pull top markets on both venues and fuzzy-match all.
+const scanAll = envBool('SCAN_ALL', false)
+  || !env('POLYMARKET_URL')
+  || !env('KALSHI_URL');
+
 export const config = {
-  // Market URLs (override via env for Coolify without editing files)
-  polymarketUrl: env(
-    'POLYMARKET_URL',
-    'https://polymarket.com/event/who-will-trump-nominate-as-fed-chair',
-  ),
-  kalshiUrl: env(
-    'KALSHI_URL',
-    'https://kalshi.com/markets/kxfedchairnom/fed-chair-nominee/kxfedchairnom-29',
-  ),
+  // Single-event mode (ignored when scanAll is true)
+  polymarketUrl: env('POLYMARKET_URL', ''),
+  kalshiUrl: env('KALSHI_URL', ''),
+
+  // Universe scan: fetch many markets, match every Poly outcome ↔ Kalshi outcome
+  scanAll,
+  scanLimitPoly: envNum('SCAN_LIMIT_POLY', 100),
+  scanLimitKalshi: envNum('SCAN_LIMIT_KALSHI', 100),
+  scanQuery: env('SCAN_QUERY', ''), // optional text filter, e.g. "fed" or "bitcoin"
+  scanSort: env('SCAN_SORT', 'volume'), // volume | liquidity | newest
 
   pollIntervalSeconds: envNum('POLL_INTERVAL_SECONDS', 60),
   minProfitCents: envNum('MIN_PROFIT_CENTS', 1),
   tradingMode: env('TRADING_MODE', 'CONSERVATIVE'), // YOLO | CONSERVATIVE
   tradeAmountCents: envNum('TRADE_AMOUNT_CENTS', 100),
-  matchingThreshold: envNum('MATCHING_THRESHOLD', 0.7),
-  topNOpportunities: envNum('TOP_N_OPPORTUNITIES', 5),
+  // Lower = more matches (noisier). 0.55–0.65 for broad scan; 0.8+ for strict.
+  matchingThreshold: envNum('MATCHING_THRESHOLD', scanAll ? 0.6 : 0.7),
+  topNOpportunities: envNum('TOP_N_OPPORTUNITIES', scanAll ? 20 : 5),
   minPriceThreshold: envNum('MIN_PRICE_THRESHOLD', 2),
 
   dryRun,

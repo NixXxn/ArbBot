@@ -91,7 +91,10 @@ async function refresh(){
     const rb=s.rebalance||{};
     $('rebal').innerHTML=rb.balanced?'<span class="ok">even</span>':(rb.transferUsd?`<span class="warn">$${esc(rb.transferUsd)} ${esc(rb.from)}→${esc(rb.to)}</span>`:'—');
     const cfg=s.config||{};
-    $('markets').innerHTML=`Poly: ${esc(cfg.polymarketUrl)}<br>Kalshi: ${esc(cfg.kalshiUrl)}<br>Poll: ${esc(cfg.pollIntervalSeconds)}s · min ${esc(cfg.minProfitCents)}¢ · ${esc(cfg.tradingMode)} · pmxt=${cfg.hasPmxtKey?'yes':'no'} poly=${cfg.hasPolyKey?'yes':'no'} kalshi=${cfg.hasKalshiKey?'yes':'no'}`
+    $('markets').innerHTML=(cfg.scanAll
+      ?`Scan-all: top markets on both venues (match≥${esc(cfg.matchingThreshold||'?')})`
+      :`Poly: ${esc(cfg.polymarketUrl)}<br>Kalshi: ${esc(cfg.kalshiUrl)}`)
+      +`<br>Poll: ${esc(cfg.pollIntervalSeconds)}s · min ${esc(cfg.minProfitCents)}¢ · ${esc(cfg.tradingMode)} · pmxt=${cfg.hasPmxtKey?'yes':'no'} poly=${cfg.hasPolyKey?'yes':'no'} kalshi=${cfg.hasKalshiKey?'yes':'no'}`
       +(rb.note?`<br>${esc(rb.note)}`:'');
     const rows=(s.opportunities||[]).map(o=>`<tr>
       <td>${esc(o.outcome)}</td><td>${esc(o.description)}</td><td>${esc(o.totalCost)}</td>

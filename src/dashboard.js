@@ -56,6 +56,10 @@ export function createDashboard({ config, bot }) {
       config: {
         polymarketUrl: config.polymarketUrl,
         kalshiUrl: config.kalshiUrl,
+        scanAll: config.scanAll,
+        scanLimitPoly: config.scanLimitPoly,
+        scanLimitKalshi: config.scanLimitKalshi,
+        matchingThreshold: config.matchingThreshold,
         pollIntervalSeconds: config.pollIntervalSeconds,
         minProfitCents: config.minProfitCents,
         tradingMode: config.tradingMode,
