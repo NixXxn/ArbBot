@@ -62,7 +62,10 @@ Live trades require `LIVE_KILL=0` and `DRY_RUN=false` plus venue credentials.
 
 ## Strategy (from upstream)
 
-1. Fuzzy-match outcomes across venues.
+1. Fuzzy-match outcomes across venues (enhanced matcher adapted from
+   [kalshi-polymarket-market-matching](https://github.com/RichardFeynmanEnthusiast/kalshi-polymarket-market-matching):
+   cleaned text, Jaccard, numeric strikes, entity overlap — without the heavy
+   BGE/FAISS/XGBoost stack).
 2. Compare Poly YES+Kalshi NO vs Kalshi YES+Poly NO.
 3. Market-buy both legs when profit ≥ threshold (dry-run by default).
 4. Exit / rotate when spread collapses or a better opp appears.

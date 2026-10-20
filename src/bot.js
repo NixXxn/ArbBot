@@ -116,7 +116,10 @@ export class ArbitrageBot {
           (o) => (o.label || '').toLowerCase().includes('no') || o.side === 'no',
         );
 
-        const title = yesOutcome ? yesOutcome.label : market.outcomes[0].label || market.title || market.id;
+        // Prefer event/market question for matching — outcome labels are often just "Yes"/"No".
+        const marketTitle = market.question || market.title || market.name || market.slug || '';
+        const outcomeLabel = yesOutcome?.label || market.outcomes[0]?.label || '';
+        const title = marketTitle || outcomeLabel || String(market.id || '');
         const yesId = yesOutcome ? (yesOutcome.id || yesOutcome.outcomeId) : (market.outcomes[0].id || market.outcomes[0].outcomeId);
         const noId = noOutcome ? (noOutcome.id || noOutcome.outcomeId) : (market.outcomes[1].id || market.outcomes[1].outcomeId);
 
@@ -129,6 +132,9 @@ export class ArbitrageBot {
 
         return {
           title,
+          marketTitle,
+          question: marketTitle,
+          matchText: `${marketTitle} ${outcomeLabel}`.trim(),
           marketId: market.id || market.marketId,
           yesId,
           noId,
@@ -136,6 +142,7 @@ export class ArbitrageBot {
           noPrice,
           platform,
           volume: market.volume || 0,
+          endDate: market.endDate || market.closeTime || market.close_time || null,
         };
       });
   }

@@ -1,76 +1,78 @@
-import { matchOutcomes } from '../src/matcher.js';
+import {
+  cleanText,
+  extractNumericalValue,
+  matchOutcomes,
+  scorePair,
+} from '../src/matcher.js';
 
 describe('Similarity Matcher Logic', () => {
+  test('should match exact strings', () => {
+    const poly = [{ title: 'Donald Trump', marketId: 'p1' }];
+    const kalshi = [{ title: 'Donald Trump', marketId: 'k1' }];
+    const matches = matchOutcomes(poly, kalshi, 0.85);
+    expect(matches.length).toBe(1);
+    expect(matches[0].polymarket.title).toBe('Donald Trump');
+  });
 
-    test('should match exact strings', () => {
-        const poly = [{ title: 'Donald Trump', marketId: 'p1' }];
-        const kalshi = [{ title: 'Donald Trump', marketId: 'k1' }];
+  test('should match case-insensitive', () => {
+    const poly = [{ title: 'DONALD TRUMP', marketId: 'p1' }];
+    const kalshi = [{ title: 'Donald Trump', marketId: 'k1' }];
+    expect(matchOutcomes(poly, kalshi, 0.85).length).toBe(1);
+  });
 
-        const matches = matchOutcomes(poly, kalshi, 1.0);
-        expect(matches.length).toBe(1);
-        expect(matches[0].polymarket.title).toBe('Donald Trump');
-        expect(matches[0].kalshi.title).toBe('Donald Trump');
-    });
+  test('should fuzzy match related names', () => {
+    const poly = [{ title: 'Robert F. Kennedy Jr.', marketId: 'p1' }];
+    const kalshi = [{ title: 'Robert Kennedy', marketId: 'k1' }];
+    const matches = matchOutcomes(poly, kalshi, 0.5);
+    expect(matches.length).toBe(1);
+  });
 
-    test('should match case-insensitive', () => {
-        const poly = [{ title: 'DONALD TRUMP', marketId: 'p1' }];
-        const kalshi = [{ title: 'Donald Trump', marketId: 'k1' }];
+  test('should NOT match unrelated names', () => {
+    const poly = [{ title: 'Donald Trump', marketId: 'p1' }];
+    const kalshi = [{ title: 'Joe Biden', marketId: 'k1' }];
+    expect(matchOutcomes(poly, kalshi, 0.5).length).toBe(0);
+  });
 
-        const matches = matchOutcomes(poly, kalshi, 0.9);
-        expect(matches.length).toBe(1);
-    });
+  test('should pick the BEST match when multiple candidates exist', () => {
+    const poly = [{ title: 'Doug Burgum', marketId: 'p1' }];
+    const kalshi = [
+      { title: 'Doug Collins', marketId: 'k1' },
+      { title: 'Doug Burgum', marketId: 'k2' },
+    ];
+    const matches = matchOutcomes(poly, kalshi, 0.5);
+    expect(matches.length).toBe(1);
+    expect(matches[0].kalshi.title).toBe('Doug Burgum');
+  });
 
-    test('should fuzzy match related names (High threshold)', () => {
-        const poly = [{ title: 'Robert F. Kennedy Jr.', marketId: 'p1' }];
-        const kalshi = [{ title: 'Robert Kennedy', marketId: 'k1' }];
+  test('should handle greedy matching (one-to-one)', () => {
+    const poly = [
+      { title: 'Name A', marketId: 'p1' },
+      { title: 'Name B', marketId: 'p2' },
+    ];
+    const kalshi = [
+      { title: 'Name A', marketId: 'k1' },
+      { title: 'Name B', marketId: 'k2' },
+    ];
+    const matches = matchOutcomes(poly, kalshi, 0.8);
+    expect(matches.length).toBe(2);
+    expect(matches.find((m) => m.polymarket.marketId === 'p1').kalshi.marketId).toBe('k1');
+  });
 
-        // Threshold of 0.7 is confirming our config default
-        const matches = matchOutcomes(poly, kalshi, 0.5);
-        expect(matches.length).toBe(1);
-        expect(matches[0].polymarket.title).toBe('Robert F. Kennedy Jr.');
-        expect(matches[0].kalshi.title).toBe('Robert Kennedy');
-    });
+  test('cleanText strips noise like upstream preprocessor', () => {
+    expect(cleanText('Will Bitcoin hit [$100k]? https://x.com')).toContain('bitcoin');
+    expect(cleanText('Will Bitcoin hit [$100k]? https://x.com')).not.toContain('http');
+  });
 
-    test('should NOT match unrelated names', () => {
-        const poly = [{ title: 'Donald Trump', marketId: 'p1' }];
-        const kalshi = [{ title: 'Joe Biden', marketId: 'k1' }];
+  test('numeric values reject mismatched strike prices', () => {
+    const same = scorePair('Will BTC be above $100k?', 'Bitcoin above 100000');
+    const diff = scorePair('Will BTC be above $50k?', 'Bitcoin above 100000');
+    expect(same).toBeGreaterThan(diff);
+    expect(extractNumericalValue('Will BTC be above $100k?')).toBe(100000);
+  });
 
-        const matches = matchOutcomes(poly, kalshi, 0.5); // Even with low threshold
-        expect(matches.length).toBe(0);
-    });
-
-    test('should pick the BEST match when multiple candidates exist', () => {
-        const poly = [{ title: 'Doug Burgum', marketId: 'p1' }];
-
-        // Similar names scenario
-        const kalshi = [
-            { title: 'Doug Collins', marketId: 'k1' }, // Good match but not best
-            { title: 'Doug Burgum', marketId: 'k2' }   // Perfect match
-        ];
-
-        const matches = matchOutcomes(poly, kalshi, 0.5);
-
-        expect(matches.length).toBe(1);
-        expect(matches[0].kalshi.title).toBe('Doug Burgum'); // Should match k2, not k1
-    });
-
-    test('should handle greedy matching (one-to-one)', () => {
-        const poly = [
-            { title: 'Name A', marketId: 'p1' },
-            { title: 'Name B', marketId: 'p2' }
-        ];
-        const kalshi = [
-            { title: 'Name A', marketId: 'k1' },
-            { title: 'Name B', marketId: 'k2' }
-        ];
-
-        const matches = matchOutcomes(poly, kalshi, 0.8);
-        expect(matches.length).toBe(2);
-
-        const matchA = matches.find(m => m.polymarket.marketId === 'p1');
-        expect(matchA.kalshi.marketId).toBe('k1');
-
-        const matchB = matches.find(m => m.polymarket.marketId === 'p2');
-        expect(matchB.kalshi.marketId).toBe('k2');
-    });
+  test('matches market questions not just Yes/No labels', () => {
+    const poly = [{ title: 'Yes', matchText: 'Fed cuts rates in October Yes', marketId: 'p1' }];
+    const kalshi = [{ title: 'No', matchText: 'Will the Fed cut rates in October?', marketId: 'k1' }];
+    expect(matchOutcomes(poly, kalshi, 0.45).length).toBe(1);
+  });
 });

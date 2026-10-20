@@ -44,8 +44,8 @@ export const config = {
   minProfitCents: envNum('MIN_PROFIT_CENTS', 1),
   tradingMode: env('TRADING_MODE', 'CONSERVATIVE'), // YOLO | CONSERVATIVE
   tradeAmountCents: envNum('TRADE_AMOUNT_CENTS', 100),
-  // Lower = more matches (noisier). 0.55–0.65 for broad scan; 0.8+ for strict.
-  matchingThreshold: envNum('MATCHING_THRESHOLD', scanAll ? 0.6 : 0.7),
+  // Lower = more matches (noisier). Enhanced matcher: 0.5–0.6 broad; 0.75+ strict.
+  matchingThreshold: envNum('MATCHING_THRESHOLD', scanAll ? 0.55 : 0.65),
   topNOpportunities: envNum('TOP_N_OPPORTUNITIES', scanAll ? 20 : 5),
   minPriceThreshold: envNum('MIN_PRICE_THRESHOLD', 2),
 
