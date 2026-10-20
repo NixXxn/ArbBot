@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Arbot — Poly ↔ Kalshi</title>
+  <style>
+    :root{color-scheme:dark;--bg:#0b1220;--panel:#121a2b;--line:#243049;--text:#e8eefc;--muted:#8b9bb8;--green:#3dd68c;--amber:#f5c542;--red:#ff6b7a}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 10% 0,#1a2744,transparent 40%),var(--bg);color:var(--text);font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace}
+    main{max-width:1100px;margin:auto;padding:28px}h1{font:700 26px/1.1 system-ui;margin:0}.sub{color:var(--muted);margin-top:6px}
+    .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:20px 0}.card,.panel{background:color-mix(in srgb,var(--panel) 94%,transparent);border:1px solid var(--line);border-radius:12px;padding:14px}
+    .label{color:var(--muted);font-size:11px;letter-spacing:.06em;text-transform:uppercase}.value{font:650 20px/1.2 system-ui;margin-top:8px}
+    .panel{margin-top:12px}.ok{color:var(--green)}.bad{color:var(--red)}.warn{color:var(--amber)}.note{color:var(--muted);font-size:12px}
+    table{width:100%;border-collapse:collapse;margin-top:10px}th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}th:first-child,td:first-child{text-align:left}th{color:var(--muted);font-size:11px;text-transform:uppercase}
+    pre{height:280px;overflow:auto;background:#070d18;border:1px solid var(--line);border-radius:10px;padding:12px;color:#c9d6f0;white-space:pre-wrap}
+    button{font:inherit;color:var(--text);background:#1a2740;border:1px solid var(--line);border-radius:8px;padding:8px 12px;cursor:pointer}
+    @media(max-width:800px){.grid{grid-template-columns:repeat(2,1fr)}}
+  </style>
+</head>
+<body><main>
+  <header style="display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap">
+    <div>
+      <h1>Arbot</h1>
+      <div class="sub">Polymarket ↔ Kalshi synthetic arb via pmxt · Coolify dashboard</div>
+    </div>
+    <div class="note" id="clock">Connecting…</div>
+  </header>
+
+  <section class="grid">
+    <div class="card"><div class="label">Status</div><div class="value" id="running">—</div></div>
+    <div class="card"><div class="label">Mode</div><div class="value" id="mode">—</div></div>
+    <div class="card"><div class="label">Candidates</div><div class="value" id="candidates">—</div></div>
+    <div class="card"><div class="label">Unrealized PnL</div><div class="value" id="pnl">—</div></div>
+  </section>
+
+  <section class="panel">
+    <div class="label">Markets</div>
+    <div class="note" id="markets" style="margin-top:8px">—</div>
+    <div style="margin-top:10px"><button id="poll">Force poll</button></div>
+    <div class="note" id="message" style="margin-top:8px"></div>
+  </section>
+
+  <section class="panel">
+    <div class="label">Top opportunities (spread ¢)</div>
+    <table>
+      <thead><tr><th>Outcome</th><th>Strategy</th><th>Cost</th><th>Profit ¢</th><th>Spread %</th><th>Match</th></tr></thead>
+      <tbody id="opps"></tbody>
+    </table>
+  </section>
+
+  <section class="panel">
+    <div class="label">Open position</div>
+    <pre id="position">None</pre>
+  </section>
+
+  <section class="panel">
+    <div class="label">Performance</div>
+    <table>
+      <thead><tr><th>Polls</th><th>Trades attempted</th><th>Filled</th><th>Exits</th></tr></thead>
+      <tbody id="perf"></tbody>
+    </table>
+  </section>
+
+  <section class="panel">
+    <div class="label">Recent logs</div>
+    <pre id="logs">—</pre>
+  </section>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const esc=v=>String(v??'—').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+async function api(url,opts){const r=await fetch(url,opts);const d=await r.json().catch(()=>({}));if(!r.ok)throw Error(d.error||r.statusText);return d}
+
+async function refresh(){
+  try{
+    const s=await api('/api/status');
+    $('clock').textContent=new Date().toLocaleString();
+    $('running').innerHTML=s.running?'<span class="ok">running</span>':'<span class="bad">stopped</span>';
+    $('mode').innerHTML=s.dryRun?'<span class="warn">dry-run</span>':(s.liveKill?'<span class="warn">live locked</span>':'<span class="bad">LIVE</span>');
+    $('candidates').textContent=s.candidateCount??(s.opportunities||[]).length;
+    const pnl=Number(s.currentPnLCents||0);
+    $('pnl').innerHTML=`<span class="${pnl>0?'ok':pnl<0?'bad':''}">${pnl.toFixed(2)}¢</span>`;
+    const cfg=s.config||{};
+    $('markets').innerHTML=`Poly: ${esc(cfg.polymarketUrl)}<br>Kalshi: ${esc(cfg.kalshiUrl)}<br>Poll: ${esc(cfg.pollIntervalSeconds)}s · min ${esc(cfg.minProfitCents)}¢ · ${esc(cfg.tradingMode)} · pmxt=${cfg.hasPmxtKey?'yes':'no'} poly=${cfg.hasPolyKey?'yes':'no'} kalshi=${cfg.hasKalshiKey?'yes':'no'}`;
+    const rows=(s.opportunities||[]).map(o=>`<tr>
+      <td>${esc(o.outcome)}</td><td>${esc(o.description)}</td><td>${esc(o.totalCost)}</td>
+      <td class="ok">${esc(Number(o.profitCents).toFixed(2))}</td><td>${esc(o.spreadPct)}%</td><td>${esc(Number(o.similarity||0).toFixed(2))}</td>
+    </tr>`).join('')||'<tr><td colspan="6">No opportunities this poll</td></tr>';
+    $('opps').innerHTML=rows;
+    $('position').textContent=s.currentPosition?JSON.stringify(s.currentPosition,null,2):'None';
+    const st=s.stats||{};
+    $('perf').innerHTML=`<tr><td>${esc(st.polls||0)}</td><td>${esc(st.tradesAttempted||0)}</td><td>${esc(st.tradesFilled||0)}</td><td>${esc(st.exits||0)}</td></tr>`;
+    $('logs').textContent=(s.logs||[]).slice().reverse().slice(0,80).map(l=>`${l.at} ${l.level} ${l.message}`).join('\n')||'—';
+    $('message').textContent=s.lastError?`Last error: ${s.lastError}`:'';
+  }catch(e){$('clock').textContent='Dashboard error';$('message').textContent=e.message}
+}
+
+$('poll').onclick=async()=>{
+  try{await api('/api/poll',{method:'POST'});$('message').textContent='Poll complete';await refresh()}
+  catch(e){$('message').textContent=e.message}
+};
+refresh();setInterval(refresh,5000);
+</script>
+</body></html>
