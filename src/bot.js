@@ -7,6 +7,7 @@ import {
   equalizeLedger,
   planRebalance,
 } from './rebalance.js';
+import { kalshiEventUrl, polymarketEventUrl, sizeTradeCents } from './sizing.js';
 import { bumpStat, patchState, pushLog, setOpportunities } from './state.js';
 
 function clientOpts(config) {
@@ -130,12 +131,19 @@ export class ArbitrageBot {
           ? Number((noOutcome.price * 100).toFixed(2))
           : Number((market.outcomes[1].price * 100).toFixed(2));
 
+        const slug = market.slug || market.eventSlug || market.event_slug || null;
+        const ticker = market.ticker || market.eventTicker || market.event_ticker || market.id || null;
+        const eventUrl = market.url || market.eventUrl || market.marketUrl || null;
+
         return {
           title,
           marketTitle,
           question: marketTitle,
           matchText: `${marketTitle} ${outcomeLabel}`.trim(),
           marketId: market.id || market.marketId,
+          slug,
+          ticker,
+          eventUrl,
           yesId,
           noId,
           yesPrice,
@@ -145,6 +153,33 @@ export class ArbitrageBot {
           endDate: market.endDate || market.closeTime || market.close_time || null,
         };
       });
+  }
+
+  /** Reset dry-run (or tracked) budget from the dashboard. */
+  resetBudget(totalUsd, { clearPosition = true } = {}) {
+    const total = Math.max(2, Number(totalUsd) || this.config.paperBudgetUsd || 1000);
+    const each = Math.round((total / 2) * 100) / 100;
+    this.ledger = { polymarket: each, kalshi: each };
+    if (clearPosition) this.currentPosition = null;
+    this.config.paperBudgetUsd = total;
+    const plan = planRebalance(each, each, {
+      targetRatio: this.config.rebalanceTargetRatio,
+      minDeltaUsd: this.config.rebalanceMinDeltaUsd,
+    });
+    this.publishBalances(plan, 'reset');
+    patchState({ currentPosition: null, currentPnLCents: 0 });
+    pushLog('info', `BUDGET RESET → $${each} Poly / $${each} Kalshi (total $${total})`);
+    return { polymarket: each, kalshi: each, total };
+  }
+
+  setTradingMode(mode) {
+    const allowed = new Set(['CONSERVATIVE', 'KELLY', 'YOLO']);
+    const next = String(mode || '').toUpperCase();
+    if (!allowed.has(next)) throw new Error('tradingMode must be CONSERVATIVE, KELLY, or YOLO');
+    this.config.tradingMode = next;
+    patchState({ tradingMode: next });
+    pushLog('info', `Trading mode → ${next}`);
+    return next;
   }
 
   async executeTrade(platform, marketId, outcomeId, side, contracts, priceCents = null) {
@@ -292,14 +327,22 @@ export class ArbitrageBot {
     );
   }
 
-  tradeBudgetCents() {
+  tradeBudgetCents(opportunity = null) {
     const capUsd = Math.min(this.ledger.polymarket, this.ledger.kalshi);
-    const capCents = Math.floor(capUsd * 100);
-    if (this.config.tradingMode === 'YOLO') {
-      // Leave a small buffer so both sides keep residual cash.
-      return Math.max(0, Math.floor(capCents * 0.95));
-    }
-    return Math.max(0, Math.min(this.config.tradeAmountCents, capCents));
+    const bankrollCents = Math.floor(capUsd * 100);
+    const sized = sizeTradeCents({
+      mode: this.config.tradingMode,
+      bankrollCents,
+      fixedCents: this.config.tradeAmountCents,
+      profitCents: opportunity?.profit,
+      totalCostCents: opportunity?.totalCost,
+      similarity: opportunity?.similarity,
+      kellyFraction: this.config.kellyFraction,
+      kellyMaxBankrollPct: this.config.kellyMaxBankrollPct,
+      kellyMinCents: this.config.kellyMinCents,
+      baseFillProb: this.config.kellyBaseFillProb,
+    });
+    return sized;
   }
 
   async executeArbitrage(opportunity) {
@@ -307,11 +350,18 @@ export class ArbitrageBot {
     bumpStat('tradesAttempted');
 
     await this.refreshBalances();
-    const tradeAmountCents = this.tradeBudgetCents();
+    const sized = this.tradeBudgetCents(opportunity);
+    const tradeAmountCents = sized.cents;
     if (tradeAmountCents < 10) {
-      pushLog('error', `Skip: budget too low after rebalance (cap ${tradeAmountCents}¢). Fund the thinner venue.`);
+      pushLog('error', `Skip: budget too low (${sized.mode}/${sized.reason}, cap ${tradeAmountCents}¢).`);
       return false;
     }
+    pushLog(
+      'info',
+      `SIZE ${sized.mode}: ${tradeAmountCents}¢`
+        + (sized.p != null ? ` · p=${(sized.p * 100).toFixed(1)}%` : '')
+        + (sized.fraction != null ? ` · f=${(sized.fraction * 100).toFixed(1)}%` : ''),
+    );
 
     const polyPrice = opportunity.polymarketSide === 'YES'
       ? opportunity.polymarketOutcome.yesPrice

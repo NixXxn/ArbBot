@@ -62,8 +62,11 @@ export function createDashboard({ config, bot }) {
         matchingThreshold: config.matchingThreshold,
         pollIntervalSeconds: config.pollIntervalSeconds,
         minProfitCents: config.minProfitCents,
-        tradingMode: config.tradingMode,
+        tradingMode: bot?.config?.tradingMode || config.tradingMode,
         tradeAmountCents: config.tradeAmountCents,
+        kellyFraction: config.kellyFraction,
+        kellyMaxBankrollPct: config.kellyMaxBankrollPct,
+        paperBudgetUsd: bot?.config?.paperBudgetUsd || config.paperBudgetUsd,
         dryRun: config.dryRun,
         liveKill: config.liveKill,
         hasPmxtKey: Boolean(config.pmxtApiKey),
@@ -83,6 +86,43 @@ export function createDashboard({ config, bot }) {
       res.json({ ok: true, status: getState() });
     } catch (err) {
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/budget', (req, res) => {
+    try {
+      if (!bot) {
+        res.status(503).json({ error: 'Bot not running' });
+        return;
+      }
+      const total = Number(req.body?.totalUsd ?? req.body?.budget ?? req.body?.amount);
+      if (!Number.isFinite(total) || total < 2) {
+        res.status(400).json({ error: 'totalUsd must be >= 2' });
+        return;
+      }
+      if (bot.currentPosition && !req.body?.force) {
+        res.status(409).json({
+          error: 'Open position exists — close/exit first, or pass force:true',
+        });
+        return;
+      }
+      const balances = bot.resetBudget(total, { clearPosition: true });
+      res.json({ ok: true, balances, status: getState() });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/trading-mode', (req, res) => {
+    try {
+      if (!bot) {
+        res.status(503).json({ error: 'Bot not running' });
+        return;
+      }
+      const mode = bot.setTradingMode(req.body?.mode);
+      res.json({ ok: true, tradingMode: mode, status: getState() });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
     }
   });
 

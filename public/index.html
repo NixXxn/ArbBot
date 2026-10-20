@@ -7,13 +7,16 @@
   <style>
     :root{color-scheme:dark;--bg:#0b1220;--panel:#121a2b;--line:#243049;--text:#e8eefc;--muted:#8b9bb8;--green:#3dd68c;--amber:#f5c542;--red:#ff6b7a}
     *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 10% 0,#1a2744,transparent 40%),var(--bg);color:var(--text);font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace}
-    main{max-width:1100px;margin:auto;padding:28px}h1{font:700 26px/1.1 system-ui;margin:0}.sub{color:var(--muted);margin-top:6px}
+    main{max-width:1180px;margin:auto;padding:28px}h1{font:700 26px/1.1 system-ui;margin:0}.sub{color:var(--muted);margin-top:6px}
     .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:20px 0}.card,.panel{background:color-mix(in srgb,var(--panel) 94%,transparent);border:1px solid var(--line);border-radius:12px;padding:14px}
     .label{color:var(--muted);font-size:11px;letter-spacing:.06em;text-transform:uppercase}.value{font:650 20px/1.2 system-ui;margin-top:8px}
     .panel{margin-top:12px}.ok{color:var(--green)}.bad{color:var(--red)}.warn{color:var(--amber)}.note{color:var(--muted);font-size:12px}
     table{width:100%;border-collapse:collapse;margin-top:10px}th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}th:first-child,td:first-child{text-align:left}th{color:var(--muted);font-size:11px;text-transform:uppercase}
     pre{height:280px;overflow:auto;background:#070d18;border:1px solid var(--line);border-radius:10px;padding:12px;color:#c9d6f0;white-space:pre-wrap}
-    button{font:inherit;color:var(--text);background:#1a2740;border:1px solid var(--line);border-radius:8px;padding:8px 12px;cursor:pointer}
+    button,select,input{font:inherit;color:var(--text);background:#1a2740;border:1px solid var(--line);border-radius:8px;padding:8px 12px}
+    button{cursor:pointer}a.link{color:var(--green);text-decoration:none}a.link:hover{text-decoration:underline}
+    .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:10px}
+    input[type=number]{width:110px}
     @media(max-width:800px){.grid{grid-template-columns:repeat(2,1fr)}}
   </style>
 </head>
@@ -38,16 +41,30 @@
   </section>
 
   <section class="panel">
-    <div class="label">Markets</div>
-    <div class="note" id="markets" style="margin-top:8px">—</div>
-    <div style="margin-top:10px"><button id="poll">Force poll</button></div>
+    <div class="label">Controls</div>
+    <div class="row">
+      <label class="note">Budget $ (total, split 50/50)</label>
+      <input id="budget" type="number" min="2" step="1" value="1000">
+      <button id="resetBudget">Reset budget</button>
+      <label class="note">Sizing</label>
+      <select id="tradingMode">
+        <option value="CONSERVATIVE">Conservative (fixed)</option>
+        <option value="KELLY">Kelly (edge × confidence)</option>
+        <option value="YOLO">YOLO (~95% bankroll)</option>
+      </select>
+      <button id="saveMode">Apply sizing</button>
+      <button id="poll">Force poll</button>
+    </div>
+    <div class="note" id="markets" style="margin-top:10px">—</div>
     <div class="note" id="message" style="margin-top:8px"></div>
   </section>
 
   <section class="panel">
-    <div class="label">Top opportunities (spread ¢)</div>
+    <div class="label">Top opportunities — click Poly / Kalshi to cross-check</div>
     <table>
-      <thead><tr><th>Outcome</th><th>Strategy</th><th>Cost</th><th>Profit ¢</th><th>Spread %</th><th>Match</th></tr></thead>
+      <thead><tr>
+        <th>Outcome</th><th>Strategy</th><th>Cost</th><th>Profit ¢</th><th>Spread %</th><th>Match</th><th>Links</th>
+      </tr></thead>
       <tbody id="opps"></tbody>
     </table>
   </section>
@@ -74,6 +91,12 @@
 const $=id=>document.getElementById(id);
 const esc=v=>String(v??'—').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 async function api(url,opts){const r=await fetch(url,opts);const d=await r.json().catch(()=>({}));if(!r.ok)throw Error(d.error||r.statusText);return d}
+function linkCell(o){
+  const bits=[];
+  if(o.polymarketUrl) bits.push(`<a class="link" href="${esc(o.polymarketUrl)}" target="_blank" rel="noopener">Poly</a>`);
+  if(o.kalshiUrl) bits.push(`<a class="link" href="${esc(o.kalshiUrl)}" target="_blank" rel="noopener">Kalshi</a>`);
+  return bits.join(' · ')||'—';
+}
 
 async function refresh(){
   try{
@@ -91,15 +114,20 @@ async function refresh(){
     const rb=s.rebalance||{};
     $('rebal').innerHTML=rb.balanced?'<span class="ok">even</span>':(rb.transferUsd?`<span class="warn">$${esc(rb.transferUsd)} ${esc(rb.from)}→${esc(rb.to)}</span>`:'—');
     const cfg=s.config||{};
+    if(document.activeElement!==$('budget') && cfg.paperBudgetUsd!=null)$('budget').value=cfg.paperBudgetUsd;
+    if(document.activeElement!==$('tradingMode') && cfg.tradingMode)$('tradingMode').value=cfg.tradingMode;
     $('markets').innerHTML=(cfg.scanAll
-      ?`Scan-all: top markets on both venues (match≥${esc(cfg.matchingThreshold||'?')})`
+      ?`Scan-all · match≥${esc(cfg.matchingThreshold||'?')}`
       :`Poly: ${esc(cfg.polymarketUrl)}<br>Kalshi: ${esc(cfg.kalshiUrl)}`)
-      +`<br>Poll: ${esc(cfg.pollIntervalSeconds)}s · min ${esc(cfg.minProfitCents)}¢ · ${esc(cfg.tradingMode)} · pmxt=${cfg.hasPmxtKey?'yes':'no'} poly=${cfg.hasPolyKey?'yes':'no'} kalshi=${cfg.hasKalshiKey?'yes':'no'}`
+      +`<br>Poll ${esc(cfg.pollIntervalSeconds)}s · min ${esc(cfg.minProfitCents)}¢ · sizing <b>${esc(cfg.tradingMode)}</b>`
+      +(cfg.tradingMode==='KELLY'?` (½-Kelly f=${esc(cfg.kellyFraction)}, max ${(Number(cfg.kellyMaxBankrollPct||0.25)*100).toFixed(0)}%)`:'')
+      +` · pmxt=${cfg.hasPmxtKey?'yes':'no'}`
       +(rb.note?`<br>${esc(rb.note)}`:'');
     const rows=(s.opportunities||[]).map(o=>`<tr>
       <td>${esc(o.outcome)}</td><td>${esc(o.description)}</td><td>${esc(o.totalCost)}</td>
-      <td class="ok">${esc(Number(o.profitCents).toFixed(2))}</td><td>${esc(o.spreadPct)}%</td><td>${esc(Number(o.similarity||0).toFixed(2))}</td>
-    </tr>`).join('')||'<tr><td colspan="6">No opportunities this poll</td></tr>';
+      <td class="ok">${esc(Number(o.profitCents).toFixed(2))}</td><td>${esc(o.spreadPct)}%</td>
+      <td>${esc(Number(o.similarity||0).toFixed(2))}</td><td>${linkCell(o)}</td>
+    </tr>`).join('')||'<tr><td colspan="7">No opportunities this poll</td></tr>';
     $('opps').innerHTML=rows;
     $('position').textContent=s.currentPosition?JSON.stringify(s.currentPosition,null,2):'None';
     const st=s.stats||{};
@@ -112,6 +140,23 @@ async function refresh(){
 $('poll').onclick=async()=>{
   try{await api('/api/poll',{method:'POST'});$('message').textContent='Poll complete';await refresh()}
   catch(e){$('message').textContent=e.message}
+};
+$('resetBudget').onclick=async()=>{
+  const totalUsd=Number($('budget').value);
+  if(!window.confirm(`Reset paper budget to $${totalUsd} total ($${ (totalUsd/2).toFixed(2) } each venue)? Clears open position.`))return;
+  try{
+    await api('/api/budget',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({totalUsd,force:true})});
+    $('message').textContent=`Budget reset to $${totalUsd}`;
+    await refresh();
+  }catch(e){$('message').textContent=e.message}
+};
+$('saveMode').onclick=async()=>{
+  try{
+    const mode=$('tradingMode').value;
+    await api('/api/trading-mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})});
+    $('message').textContent=`Sizing mode → ${mode}`;
+    await refresh();
+  }catch(e){$('message').textContent=e.message}
 };
 refresh();setInterval(refresh,5000);
 </script>

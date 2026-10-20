@@ -49,8 +49,10 @@ Live trades require `LIVE_KILL=0` and `DRY_RUN=false` plus venue credentials.
 | `MATCHING_THRESHOLD` | `0.6` (scan) / `0.7` | Fuzzy title match (lower = more pairs) |
 | `TOP_N_OPPORTUNITIES` | `20` (scan) | How many arb rows to keep |
 | `POLYMARKET_URL` / `KALSHI_URL` | empty | Single-event mode when `SCAN_ALL=false` |
-| `TRADING_MODE` | `CONSERVATIVE` | or `YOLO` |
-| `TRADE_AMOUNT_CENTS` | `100` | per leg in CONSERVATIVE |
+| `TRADING_MODE` | `KELLY` | `CONSERVATIVE` (fixed) · `KELLY` (edge × match confidence) · `YOLO` |
+| `TRADE_AMOUNT_CENTS` | `100` | fixed size when CONSERVATIVE |
+| `KELLY_FRACTION` | `0.5` | half-Kelly by default |
+| `KELLY_MAX_BANKROLL_PCT` | `0.25` | cap per trade vs min(venue) bankroll |
 | `MIN_PROFIT_CENTS` | `1` | entry floor |
 | `POLL_INTERVAL_SECONDS` | `60` | scan cadence |
 

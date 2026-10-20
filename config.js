@@ -42,8 +42,13 @@ export const config = {
 
   pollIntervalSeconds: envNum('POLL_INTERVAL_SECONDS', 60),
   minProfitCents: envNum('MIN_PROFIT_CENTS', 1),
-  tradingMode: env('TRADING_MODE', 'CONSERVATIVE'), // YOLO | CONSERVATIVE
+  // CONSERVATIVE (fixed) | KELLY (scales with edge + match confidence) | YOLO
+  tradingMode: env('TRADING_MODE', 'KELLY'),
   tradeAmountCents: envNum('TRADE_AMOUNT_CENTS', 100),
+  kellyFraction: envNum('KELLY_FRACTION', 0.5), // 0.5 = half-Kelly
+  kellyMaxBankrollPct: envNum('KELLY_MAX_BANKROLL_PCT', 0.25),
+  kellyMinCents: envNum('KELLY_MIN_CENTS', 25),
+  kellyBaseFillProb: envNum('KELLY_BASE_FILL_PROB', 0.92),
   // Lower = more matches (noisier). Enhanced matcher: 0.5–0.6 broad; 0.75+ strict.
   matchingThreshold: envNum('MATCHING_THRESHOLD', scanAll ? 0.55 : 0.65),
   topNOpportunities: envNum('TOP_N_OPPORTUNITIES', scanAll ? 20 : 5),
