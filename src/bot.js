@@ -1,6 +1,12 @@
 import pmxt from 'pmxtjs';
 import { matchOutcomes } from './matcher.js';
 import { findArbitrageOpportunities, getBestOpportunity } from './arbitrage.js';
+import {
+  applyCashFlow,
+  availableUsd,
+  equalizeLedger,
+  planRebalance,
+} from './rebalance.js';
 import { bumpStat, patchState, pushLog, setOpportunities } from './state.js';
 
 function clientOpts(config) {
@@ -14,6 +20,14 @@ export class ArbitrageBot {
     this.config = config;
     this.currentPosition = null;
     this.pollInterval = null;
+    const startEach = Math.max(1, Number(config.paperBudgetUsd || 1000) / 2);
+    // Tradable budget ledger (equalized after each exit). Dry-run always uses this;
+    // live seeds from fetchBalance when available.
+    this.ledger = {
+      polymarket: startEach,
+      kalshi: startEach,
+    };
+    this.lastRebalance = null;
 
     const polyOpts = {
       ...clientOpts(config),
@@ -105,9 +119,14 @@ export class ArbitrageBot {
       });
   }
 
-  async executeTrade(platform, marketId, outcomeId, side, contracts) {
+  async executeTrade(platform, marketId, outcomeId, side, contracts, priceCents = null) {
     if (this.config.dryRun) {
       pushLog('info', `[DRY RUN] ${platform} ${side.toUpperCase()} ${contracts} on ${marketId}`);
+      if (priceCents != null) {
+        const usd = (contracts * Number(priceCents)) / 100;
+        const delta = side.toLowerCase() === 'buy' ? -usd : usd;
+        this.ledger = applyCashFlow(this.ledger, platform, delta);
+      }
       return { success: true, orderId: `dry-run-${Date.now()}` };
     }
 
@@ -127,11 +146,145 @@ export class ArbitrageBot {
     }
   }
 
+  /** Read venue balances (live) or return the dry-run ledger. */
+  async refreshBalances() {
+    if (this.config.dryRun) {
+      const plan = planRebalance(this.ledger.polymarket, this.ledger.kalshi, {
+        targetRatio: this.config.rebalanceTargetRatio,
+        minDeltaUsd: this.config.rebalanceMinDeltaUsd,
+      });
+      this.publishBalances(plan, 'ledger');
+      return plan;
+    }
+
+    let poly = this.ledger.polymarket;
+    let kalshi = this.ledger.kalshi;
+    try {
+      const rows = await this.polymarket.fetchBalance();
+      const v = availableUsd(rows);
+      if (v != null) poly = v;
+    } catch (err) {
+      pushLog('error', `Poly balance: ${err.message}`);
+    }
+    try {
+      const rows = await this.kalshi.fetchBalance();
+      const v = availableUsd(rows);
+      if (v != null) kalshi = v;
+    } catch (err) {
+      pushLog('error', `Kalshi balance: ${err.message}`);
+    }
+    this.ledger = { polymarket: poly, kalshi };
+    const plan = planRebalance(poly, kalshi, {
+      targetRatio: this.config.rebalanceTargetRatio,
+      minDeltaUsd: this.config.rebalanceMinDeltaUsd,
+    });
+    this.publishBalances(plan, 'venue');
+    return plan;
+  }
+
+  publishBalances(plan, source) {
+    this.lastRebalance = { ...plan, source, at: Date.now() };
+    patchState({
+      balances: {
+        polymarket: plan.poly,
+        kalshi: plan.kalshi,
+        total: plan.total,
+        tradeCapUsd: plan.tradeCapUsd,
+        source,
+      },
+      rebalance: {
+        balanced: plan.balanced,
+        from: plan.from,
+        to: plan.to,
+        transferUsd: plan.transferUsd,
+        targetPoly: plan.targetPoly,
+        targetKalshi: plan.targetKalshi,
+        imbalanceUsd: plan.imbalanceUsd,
+        note: plan.balanced
+          ? 'Budgets aligned'
+          : `Move ~$${plan.transferUsd} ${plan.from} → ${plan.to} (bank/USDC). Until then trades size to min(side)=$${plan.tradeCapUsd}.`,
+      },
+    });
+  }
+
+  /**
+   * After win/loss: keep both venues funded for the next arb.
+   * Dry-run: equalize the cash ledger 50/50.
+   * Live: read real balances, size to min(side), and show the bank/USDC
+   * transfer needed (venues cannot wire to each other via API).
+   */
+  async rebalanceAfterPnl(reason = 'exit') {
+    if (!this.config.rebalanceEnabled) {
+      await this.refreshBalances();
+      return;
+    }
+
+    if (!this.config.dryRun) {
+      await this.refreshBalances();
+      const plan = planRebalance(this.ledger.polymarket, this.ledger.kalshi, {
+        targetRatio: this.config.rebalanceTargetRatio,
+        minDeltaUsd: this.config.rebalanceMinDeltaUsd,
+      });
+      bumpStat('rebalances');
+      this.publishBalances(plan, 'venue');
+      if (plan.balanced) {
+        pushLog('info', `REBALANCE (${reason}): venues even · Poly $${plan.poly} / Kalshi $${plan.kalshi}`);
+      } else {
+        pushLog(
+          'info',
+          `REBALANCE (${reason}): Poly $${plan.poly} / Kalshi $${plan.kalshi} · move ~$${plan.transferUsd} ${plan.from}→${plan.to} · next trade capped at $${plan.tradeCapUsd}`,
+        );
+      }
+      return;
+    }
+
+    const before = { ...this.ledger };
+    const { balances, plan } = equalizeLedger(this.ledger, {
+      targetRatio: this.config.rebalanceTargetRatio,
+      minDeltaUsd: this.config.rebalanceMinDeltaUsd,
+    });
+    this.ledger = balances;
+    bumpStat('rebalances');
+    // After ledger equalize, report as balanced for sizing.
+    this.publishBalances({
+      ...plan,
+      poly: balances.polymarket,
+      kalshi: balances.kalshi,
+      total: balances.polymarket + balances.kalshi,
+      tradeCapUsd: Math.min(balances.polymarket, balances.kalshi),
+      balanced: true,
+      from: null,
+      to: null,
+      transferUsd: 0,
+      imbalanceUsd: 0,
+    }, 'ledger-equalized');
+    pushLog(
+      'info',
+      `REBALANCE (${reason}): $${before.polymarket}/$${before.kalshi} → $${balances.polymarket}/$${balances.kalshi} (dry-run ledger 50/50)`,
+    );
+  }
+
+  tradeBudgetCents() {
+    const capUsd = Math.min(this.ledger.polymarket, this.ledger.kalshi);
+    const capCents = Math.floor(capUsd * 100);
+    if (this.config.tradingMode === 'YOLO') {
+      // Leave a small buffer so both sides keep residual cash.
+      return Math.max(0, Math.floor(capCents * 0.95));
+    }
+    return Math.max(0, Math.min(this.config.tradeAmountCents, capCents));
+  }
+
   async executeArbitrage(opportunity) {
     pushLog('info', `EXECUTE ${opportunity.outcome}: ${opportunity.description} | ${opportunity.profit.toFixed(2)}¢`);
     bumpStat('tradesAttempted');
 
-    const tradeAmountCents = this.config.tradingMode === 'YOLO' ? 1000 : this.config.tradeAmountCents;
+    await this.refreshBalances();
+    const tradeAmountCents = this.tradeBudgetCents();
+    if (tradeAmountCents < 10) {
+      pushLog('error', `Skip: budget too low after rebalance (cap ${tradeAmountCents}¢). Fund the thinner venue.`);
+      return false;
+    }
+
     const polyPrice = opportunity.polymarketSide === 'YES'
       ? opportunity.polymarketOutcome.yesPrice
       : opportunity.polymarketOutcome.noPrice;
@@ -149,8 +302,8 @@ export class ArbitrageBot {
       : opportunity.kalshiOutcome.noId;
 
     const [polyTrade, kalshiTrade] = await Promise.all([
-      this.executeTrade('polymarket', opportunity.polymarketOutcome.marketId, polyOutcomeId, 'buy', polyContracts),
-      this.executeTrade('kalshi', opportunity.kalshiOutcome.marketId, kalshiOutcomeId, 'buy', kalshiContracts),
+      this.executeTrade('polymarket', opportunity.polymarketOutcome.marketId, polyOutcomeId, 'buy', polyContracts, polyPrice),
+      this.executeTrade('kalshi', opportunity.kalshiOutcome.marketId, kalshiOutcomeId, 'buy', kalshiContracts, kalshiPrice),
     ]);
 
     if (polyTrade.success && kalshiTrade.success) {
@@ -164,7 +317,12 @@ export class ArbitrageBot {
         entryTime: Date.now(),
       };
       bumpStat('tradesFilled');
-      patchState({ currentPosition: this.currentPosition });
+      patchState({ currentPosition: this.currentPosition, balances: {
+        polymarket: this.ledger.polymarket,
+        kalshi: this.ledger.kalshi,
+        total: this.ledger.polymarket + this.ledger.kalshi,
+        tradeCapUsd: Math.min(this.ledger.polymarket, this.ledger.kalshi),
+      }});
       return true;
     }
     pushLog('error', 'Trade execution failed (one or both legs)');
@@ -204,18 +362,22 @@ export class ArbitrageBot {
     return false;
   }
 
-  async exitPosition() {
+  async exitPosition(markPrices = null) {
     if (!this.currentPosition) return;
     const heldTime = Math.round((Date.now() - this.currentPosition.entryTime) / 1000);
     pushLog('info', `EXITING ${this.currentPosition.opportunity.outcome} (held ${heldTime}s)`);
-    const { outcomeIds, shares, opportunity } = this.currentPosition;
+    const { outcomeIds, shares, opportunity, entryPrices } = this.currentPosition;
+    const polyMark = markPrices?.polymarket ?? entryPrices.polymarket;
+    const kalshiMark = markPrices?.kalshi ?? entryPrices.kalshi;
     await Promise.all([
-      this.executeTrade('polymarket', opportunity.polymarketOutcome.marketId, outcomeIds.polymarket, 'sell', shares.polymarket),
-      this.executeTrade('kalshi', opportunity.kalshiOutcome.marketId, outcomeIds.kalshi, 'sell', shares.kalshi),
+      this.executeTrade('polymarket', opportunity.polymarketOutcome.marketId, outcomeIds.polymarket, 'sell', shares.polymarket, polyMark),
+      this.executeTrade('kalshi', opportunity.kalshiOutcome.marketId, outcomeIds.kalshi, 'sell', shares.kalshi, kalshiMark),
     ]);
     bumpStat('exits');
     this.currentPosition = null;
     patchState({ currentPosition: null });
+    // Always rebalance after realized win/loss so both sides keep budget.
+    await this.rebalanceAfterPnl('exit');
   }
 
   async poll() {
@@ -265,7 +427,17 @@ export class ArbitrageBot {
         pushLog('info', `No arb ≥ ${this.config.minProfitCents}¢ (${matches.length} matches)`);
       }
 
-      if (this.shouldExitPosition(topOpportunities)) await this.exitPosition();
+      if (this.shouldExitPosition(topOpportunities)) {
+        const pos = this.currentPosition;
+        const polyNow = polymarketOutcomes.find((o) => o.marketId === pos?.opportunity?.polymarketOutcome?.marketId);
+        const kalshiNow = kalshiOutcomes.find((o) => o.marketId === pos?.opportunity?.kalshiOutcome?.marketId);
+        const polySide = pos?.opportunity?.polymarketSide;
+        const kalshiSide = pos?.opportunity?.kalshiSide;
+        await this.exitPosition({
+          polymarket: polySide === 'YES' ? polyNow?.yesPrice : polyNow?.noPrice,
+          kalshi: kalshiSide === 'YES' ? kalshiNow?.yesPrice : kalshiNow?.noPrice,
+        });
+      }
       if (!this.currentPosition && topOpportunities.length > 0) {
         await this.executeArbitrage(getBestOpportunity(topOpportunities));
       }
@@ -287,8 +459,9 @@ export class ArbitrageBot {
     });
     pushLog(
       'info',
-      `Bot started | every ${this.config.pollIntervalSeconds}s | min ${this.config.minProfitCents}¢ | ${this.config.tradingMode} | dryRun=${this.config.dryRun}`,
+      `Bot started | every ${this.config.pollIntervalSeconds}s | min ${this.config.minProfitCents}¢ | ${this.config.tradingMode} | dryRun=${this.config.dryRun} | rebalance=${this.config.rebalanceEnabled}`,
     );
+    await this.rebalanceAfterPnl('start');
     await this.poll();
     this.pollInterval = setInterval(async () => {
       await this.poll();

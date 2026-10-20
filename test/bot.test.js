@@ -32,12 +32,24 @@ describe('ArbitrageBot', () => {
             minProfitCents: 1,
             tradingMode: 'CONSERVATIVE',
             tradeAmountCents: entryAmountCents,
-            dryRun: false
+            dryRun: false,
+            rebalanceEnabled: true,
+            rebalanceTargetRatio: 0.5,
+            rebalanceMinDeltaUsd: 1,
+            paperBudgetUsd: 1000,
         };
+        bot.ledger = { polymarket: 500, kalshi: 500 };
+        bot.lastRebalance = null;
 
         // Mock clients
-        bot.polymarket = { createOrder: jest.fn().mockResolvedValue({ id: 'poly_order_1' }) };
-        bot.kalshi = { createOrder: jest.fn().mockResolvedValue({ id: 'kalshi_order_1' }) };
+        bot.polymarket = {
+            createOrder: jest.fn().mockResolvedValue({ id: 'poly_order_1' }),
+            fetchBalance: jest.fn().mockResolvedValue([{ currency: 'USDC', available: 500, total: 500 }]),
+        };
+        bot.kalshi = {
+            createOrder: jest.fn().mockResolvedValue({ id: 'kalshi_order_1' }),
+            fetchBalance: jest.fn().mockResolvedValue([{ currency: 'USD', available: 500, total: 500 }]),
+        };
 
         // Setup a standard position for PnL and Exit tests
         bot.currentPosition = {

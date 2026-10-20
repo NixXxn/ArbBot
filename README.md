@@ -61,3 +61,4 @@ Live trades require `LIVE_KILL=0` and `DRY_RUN=false` plus venue credentials.
 2. Compare Poly YES+Kalshi NO vs Kalshi YES+Poly NO.
 3. Market-buy both legs when profit ≥ threshold (dry-run by default).
 4. Exit / rotate when spread collapses or a better opp appears.
+5. **Rebalance after every exit:** equalize trade budgets 50/50 so both venues stay funded. Dry-run does this on an internal ledger; live sizes to `min(Poly, Kalshi)` and shows any bank/USDC transfer still needed (venues cannot wire to each other via API).

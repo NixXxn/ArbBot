@@ -27,7 +27,10 @@ const state = {
     tradesAttempted: 0,
     tradesFilled: 0,
     exits: 0,
+    rebalances: 0,
   },
+  balances: null,
+  rebalance: null,
   logs: [],
 };
 

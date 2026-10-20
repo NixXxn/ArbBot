@@ -45,6 +45,15 @@ export const config = {
   dryRun,
   liveKill,
 
+  // After each exit (win/loss): equalize trade budgets across venues.
+  // Real Poly↔Kalshi bank wires are not available via API; we redistribute
+  // the internal ledger and size the next trade by min(poly, kalshi).
+  rebalanceEnabled: envBool('REBALANCE_ENABLED', true),
+  rebalanceTargetRatio: envNum('REBALANCE_TARGET_RATIO', 0.5),
+  rebalanceMinDeltaUsd: envNum('REBALANCE_MIN_DELTA_USD', 1),
+  // Starting cash per side in dry-run (total = 2 × this unless PAPER_BUDGET set)
+  paperBudgetUsd: envNum('PAPER_BUDGET', envNum('REBALANCE_START_USD', 1000)),
+
   // Polymarket — accept legacy ArbBot names + reference names
   polymarketPrivateKey: env('POLYMARKET_PRIVATE_KEY') || env('POLY_PRIVATE_KEY'),
   polymarketFunder: env('POLYMARKET_PROXY_ADDRESS') || env('POLY_FUNDER'),
