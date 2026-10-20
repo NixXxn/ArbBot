@@ -35,10 +35,11 @@ export const config = {
 
   // Universe scan: fetch many markets, match every Poly outcome ↔ Kalshi outcome
   scanAll,
-  scanLimitPoly: envNum('SCAN_LIMIT_POLY', 100),
-  scanLimitKalshi: envNum('SCAN_LIMIT_KALSHI', 100),
+  // Pull enough per venue that Poly/Kalshi volume leaders actually overlap.
+  scanLimitPoly: envNum('SCAN_LIMIT_POLY', 300),
+  scanLimitKalshi: envNum('SCAN_LIMIT_KALSHI', 300),
   scanQuery: env('SCAN_QUERY', ''), // optional text filter, e.g. "fed" or "bitcoin"
-  scanSort: env('SCAN_SORT', 'volume'), // volume | liquidity | newest
+  scanSort: env('SCAN_SORT', 'volume'), // primary sort; scan also merges liquidity+newest
 
   pollIntervalSeconds: envNum('POLL_INTERVAL_SECONDS', 60),
   minProfitCents: envNum('MIN_PROFIT_CENTS', 1),
@@ -49,10 +50,15 @@ export const config = {
   kellyMaxBankrollPct: envNum('KELLY_MAX_BANKROLL_PCT', 0.25),
   kellyMinCents: envNum('KELLY_MIN_CENTS', 25),
   kellyBaseFillProb: envNum('KELLY_BASE_FILL_PROB', 0.92),
-  // Lower = more matches (noisier). Enhanced matcher: 0.5–0.6 broad; 0.75+ strict.
-  matchingThreshold: envNum('MATCHING_THRESHOLD', scanAll ? 0.55 : 0.65),
-  topNOpportunities: envNum('TOP_N_OPPORTUNITIES', scanAll ? 20 : 5),
+  // Lower = more matches (noisier). Year mismatches are hard-rejected.
+  matchingThreshold: envNum('MATCHING_THRESHOLD', scanAll ? 0.5 : 0.65),
+  topNOpportunities: envNum('TOP_N_OPPORTUNITIES', scanAll ? 25 : 5),
   minPriceThreshold: envNum('MIN_PRICE_THRESHOLD', 2),
+  // Skip paper-thin books (USDC / USD notional from pmxt when present).
+  minLiquidity: envNum('MIN_LIQUIDITY', 50),
+  // After public-API enrich: Kalshi open interest (contracts). 0 = no filter.
+  minKalshiLiquidity: envNum('MIN_KALSHI_LIQUIDITY', 5),
+  minVolume: envNum('MIN_VOLUME', 0),
 
   dryRun,
   liveKill,

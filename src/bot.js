@@ -1,6 +1,7 @@
 import pmxt from 'pmxtjs';
 import { matchOutcomes } from './matcher.js';
 import { findArbitrageOpportunities, getBestOpportunity } from './arbitrage.js';
+import { enrichMatchKalshiQuotes } from './kalshiQuotes.js';
 import {
   applyCashFlow,
   availableUsd,
@@ -61,6 +62,29 @@ export class ArbitrageBot {
     return parts[parts.length - 1].toUpperCase();
   }
 
+  /** Dedupe by id/url and keep the richer row. */
+  mergeMarkets(lists) {
+    const byKey = new Map();
+    for (const list of lists) {
+      for (const m of list || []) {
+        const key = String(m.id || m.marketId || m.url || m.title || Math.random());
+        if (!byKey.has(key)) byKey.set(key, m);
+      }
+    }
+    return [...byKey.values()];
+  }
+
+  async fetchVenueScan(client, limit) {
+    const q = this.config.scanQuery || undefined;
+    const reqs = [
+      client.fetchMarkets({ limit, sort: 'volume', ...(q ? { query: q } : {}) }),
+      client.fetchMarkets({ limit: Math.ceil(limit / 2), sort: 'liquidity', ...(q ? { query: q } : {}) }),
+      client.fetchMarkets({ limit: Math.ceil(limit / 3), sort: 'newest', ...(q ? { query: q } : {}) }),
+    ];
+    const parts = await Promise.all(reqs.map((p) => p.catch(() => [])));
+    return this.mergeMarkets(parts);
+  }
+
   async fetchMarkets() {
     const scanAll = Boolean(this.config.scanAll);
 
@@ -73,12 +97,7 @@ export class ArbitrageBot {
         }
         return this.polymarket.fetchMarkets({ slug: polymarketId, limit: 50 });
       }
-      const params = {
-        limit: this.config.scanLimitPoly || 100,
-        sort: this.config.scanSort || 'volume',
-      };
-      if (this.config.scanQuery) params.query = this.config.scanQuery;
-      return this.polymarket.fetchMarkets(params);
+      return this.fetchVenueScan(this.polymarket, this.config.scanLimitPoly || 300);
     };
 
     const fetchKalshi = async () => {
@@ -90,12 +109,7 @@ export class ArbitrageBot {
         }
         return this.kalshi.fetchMarkets({ slug: kalshiId, limit: 50 });
       }
-      const params = {
-        limit: this.config.scanLimitKalshi || 100,
-        sort: this.config.scanSort || 'volume',
-      };
-      if (this.config.scanQuery) params.query = this.config.scanQuery;
-      return this.kalshi.fetchMarkets(params);
+      return this.fetchVenueScan(this.kalshi, this.config.scanLimitKalshi || 300);
     };
 
     const [polymarketMarkets, kalshiMarkets] = await Promise.all([fetchPoly(), fetchKalshi()]);
@@ -107,29 +121,48 @@ export class ArbitrageBot {
   }
 
   parseOutcomes(markets, platform) {
+    const minLiq = Number(this.config.minLiquidity || 0);
+    const minVol = Number(this.config.minVolume || 0);
     return markets
       .filter((m) => m.outcomes && m.outcomes.length >= 2)
+      .filter((m) => {
+        // pmxt often returns 0 liquidity/volume for Kalshi — don't drop the whole venue.
+        const liq = Number(m.liquidity) || 0;
+        const vol = Number(m.volume) || Number(m.volume24h) || 0;
+        if (platform === 'kalshi' && liq === 0 && vol === 0) return true;
+        if (minLiq > 0 && liq < minLiq) return false;
+        if (minVol > 0 && vol < minVol) return false;
+        return true;
+      })
       .map((market) => {
-        const yesOutcome = market.outcomes.find(
-          (o) => (o.label || '').toLowerCase().includes('yes') || o.side === 'yes',
+        // Binary markets are often "Candidate" / "Not Candidate" (not Yes/No).
+        let yesOutcome = market.outcomes.find(
+          (o) => {
+            const l = (o.label || '').toLowerCase();
+            return o.side === 'yes' || l === 'yes' || (l.startsWith('yes') && l.length < 8);
+          },
         );
-        const noOutcome = market.outcomes.find(
-          (o) => (o.label || '').toLowerCase().includes('no') || o.side === 'no',
+        let noOutcome = market.outcomes.find(
+          (o) => {
+            const l = (o.label || '').toLowerCase();
+            return o.side === 'no' || l === 'no' || l.startsWith('not ');
+          },
         );
+        if (!yesOutcome || !noOutcome) {
+          // Prefer the non-"Not …" label as the YES/named side.
+          const named = market.outcomes.find((o) => !/^not\s/i.test(o.label || ''));
+          const negated = market.outcomes.find((o) => /^not\s/i.test(o.label || ''));
+          yesOutcome = yesOutcome || named || market.outcomes[0];
+          noOutcome = noOutcome || negated || market.outcomes[1];
+        }
 
-        // Prefer event/market question for matching — outcome labels are often just "Yes"/"No".
         const marketTitle = market.question || market.title || market.name || market.slug || '';
-        const outcomeLabel = yesOutcome?.label || market.outcomes[0]?.label || '';
+        const outcomeLabel = yesOutcome?.label || '';
         const title = marketTitle || outcomeLabel || String(market.id || '');
-        const yesId = yesOutcome ? (yesOutcome.id || yesOutcome.outcomeId) : (market.outcomes[0].id || market.outcomes[0].outcomeId);
-        const noId = noOutcome ? (noOutcome.id || noOutcome.outcomeId) : (market.outcomes[1].id || market.outcomes[1].outcomeId);
-
-        const yesPrice = yesOutcome
-          ? Number((yesOutcome.price * 100).toFixed(2))
-          : Number((market.outcomes[0].price * 100).toFixed(2));
-        const noPrice = noOutcome
-          ? Number((noOutcome.price * 100).toFixed(2))
-          : Number((market.outcomes[1].price * 100).toFixed(2));
+        const yesId = yesOutcome.id || yesOutcome.outcomeId;
+        const noId = noOutcome.id || noOutcome.outcomeId;
+        const yesPrice = Number((Number(yesOutcome.price) * 100).toFixed(2));
+        const noPrice = Number((Number(noOutcome.price) * 100).toFixed(2));
 
         const slug = market.slug || market.eventSlug || market.event_slug || null;
         const ticker = market.ticker || market.eventTicker || market.event_ticker || market.id || null;
@@ -139,6 +172,7 @@ export class ArbitrageBot {
           title,
           marketTitle,
           question: marketTitle,
+          candidate: outcomeLabel,
           matchText: `${marketTitle} ${outcomeLabel}`.trim(),
           marketId: market.id || market.marketId,
           slug,
@@ -149,8 +183,9 @@ export class ArbitrageBot {
           yesPrice,
           noPrice,
           platform,
-          volume: market.volume || 0,
-          endDate: market.endDate || market.closeTime || market.close_time || null,
+          volume: market.volume || market.volume24h || 0,
+          liquidity: market.liquidity || 0,
+          endDate: market.endDate || market.closeTime || market.close_time || market.resolutionDate || null,
         };
       });
   }
@@ -465,10 +500,20 @@ export class ArbitrageBot {
       const polymarketOutcomes = this.parseOutcomes(polymarketMarkets, 'polymarket');
       const kalshiOutcomes = this.parseOutcomes(kalshiMarkets, 'kalshi');
       const matches = matchOutcomes(polymarketOutcomes, kalshiOutcomes, this.config.matchingThreshold);
+      // pmxt Kalshi books are often stub 50/50 — pull real asks from Kalshi public API.
+      const quoteStats = await enrichMatchKalshiQuotes(matches);
       const allOpportunities = findArbitrageOpportunities(matches, this.config.minProfitCents)
         .filter((opp) => {
           const { yesPrice: polyYes, noPrice: polyNo } = opp.polymarketOutcome;
-          const { yesPrice: kalshiYes, noPrice: kalshiNo } = opp.kalshiOutcome;
+          const { yesPrice: kalshiYes, noPrice: kalshiNo, liquidity: kLiq } = opp.kalshiOutcome;
+          // Stub books (exactly 50/50) are not tradable — common on thin Kalshi rows.
+          const stub = (y, n) => Math.abs(y - 50) < 0.05 && Math.abs(n - 50) < 0.05;
+          if (stub(polyYes, polyNo) || stub(kalshiYes, kalshiNo)) return false;
+          // One-sided book (ask ~par) can't be used for cross-venue arb.
+          if (kalshiYes >= 98 || kalshiNo >= 98) return false;
+          if (polyYes >= 98 || polyNo >= 98) return false;
+          const minKLiq = Number(this.config.minKalshiLiquidity || 0);
+          if (minKLiq > 0 && (Number(kLiq) || 0) < minKLiq) return false;
           return polyYes > this.config.minPriceThreshold
             && polyNo > this.config.minPriceThreshold
             && kalshiYes > this.config.minPriceThreshold
@@ -491,11 +536,19 @@ export class ArbitrageBot {
         lastError: null,
         currentPnLCents: currentPnL,
         currentPosition: this.currentPosition,
+        polyMarkets: polymarketMarkets.length,
+        kalshiMarkets: kalshiMarkets.length,
         polyOutcomes: polymarketOutcomes.length,
         kalshiOutcomes: kalshiOutcomes.length,
         matches: matches.length,
+        candidateCount: topOpportunities.length,
+        kalshiQuotesEnriched: quoteStats.enriched,
       });
 
+      pushLog(
+        'info',
+        `Scan poly=${polymarketMarkets.length} kalshi=${kalshiMarkets.length} → outcomes ${polymarketOutcomes.length}/${kalshiOutcomes.length} → matches ${matches.length} → kalshiQuotes ${quoteStats.enriched}/${quoteStats.tickers} → opps ${topOpportunities.length}`,
+      );
       if (topOpportunities.length > 0) {
         pushLog(
           'info',

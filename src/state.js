@@ -76,14 +76,18 @@ function summarizeOpp(opp) {
     polyNo: poly.noPrice,
     kalshiYes: kalshi.yesPrice,
     kalshiNo: kalshi.noPrice,
-    polymarketUrl: poly.eventUrl || (poly.slug ? `https://polymarket.com/event/${poly.slug}` : null)
+    polymarketUrl: poly.eventUrl
+      || (poly.slug ? `https://polymarket.com/event/${poly.slug}` : null)
       || (poly.question || poly.title
         ? `https://polymarket.com/search?_q=${encodeURIComponent(poly.question || poly.title)}`
         : null),
-    kalshiUrl: kalshi.eventUrl || (kalshi.ticker ? `https://kalshi.com/markets/${String(kalshi.ticker).toLowerCase()}` : null)
+    kalshiUrl: kalshi.eventUrl
+      || (kalshi.ticker ? `https://kalshi.com/markets/${String(kalshi.ticker).toLowerCase()}` : null)
       || (kalshi.question || kalshi.title
         ? `https://kalshi.com/search?query=${encodeURIComponent(kalshi.question || kalshi.title)}`
         : null),
+    polyLiquidity: poly.liquidity,
+    kalshiLiquidity: kalshi.liquidity,
   };
 }
 

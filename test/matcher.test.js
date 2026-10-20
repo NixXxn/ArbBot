@@ -75,4 +75,50 @@ describe('Similarity Matcher Logic', () => {
     const kalshi = [{ title: 'No', matchText: 'Will the Fed cut rates in October?', marketId: 'k1' }];
     expect(matchOutcomes(poly, kalshi, 0.45).length).toBe(1);
   });
+
+  test('rejects year-mismatched markets', () => {
+    expect(scorePair('How many Fed rate cuts in 2026?', 'Fed funds rate at end of 2036')).toBe(0);
+    expect(scorePair(
+      'Next Prime Minister of Romania? - Will Luca win?',
+      'Who will be the next new Prime Minister of Romania?',
+    )).toBeGreaterThan(0.45);
+  });
+
+  test('rejects country and office false friends', () => {
+    expect(scorePair(
+      'Next Prime Minister of Sweden - Will Ulf win?',
+      'Who will be the next new Prime Minister of Romania?',
+    )).toBe(0);
+    expect(scorePair(
+      'Democratic Presidential Nominee 2028 - Will Pete Buttigieg win?',
+      'Who will be the next DNC Chair?',
+    )).toBe(0);
+    expect(scorePair(
+      'Next Prime Minister of Sweden - Will Ulf Kristersson be the next Prime Minister of Sweden?',
+      'Which G7 leader will leave office next? :: Prime Minister of the United Kingdom',
+    )).toBe(0);
+  });
+
+  test('requires same person for named candidate markets', () => {
+    const polySimion = {
+      title: 'Next PM Romania',
+      matchText: 'Next Prime Minister of Romania? - Will George Simion be the next Prime Minister of Romania?',
+      candidate: 'George Simion',
+      marketId: 'p1',
+    };
+    const kalshiUsr = {
+      title: 'Romania PM',
+      matchText: 'Who will be the next new Prime Minister of Romania? :: USR',
+      candidate: ':: USR',
+      marketId: 'k1',
+    };
+    const kalshiSimion = {
+      title: 'Romania PM',
+      matchText: 'Who will be the next new Prime Minister of Romania? George Simion',
+      candidate: 'George Simion',
+      marketId: 'k2',
+    };
+    expect(matchOutcomes([polySimion], [kalshiUsr], 0.4).length).toBe(0);
+    expect(matchOutcomes([polySimion], [kalshiSimion], 0.4).length).toBe(1);
+  });
 });
